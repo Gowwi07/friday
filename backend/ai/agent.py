@@ -89,7 +89,7 @@ class FridayAgent:
 
     def __init__(self):
         self.client = genai.Client(api_key=settings.gemini_api_key)
-        self.model = "gemini-2.0-flash"
+        self.model = "gemini-2.5-flash"
 
     def _build_prompt(
         self,
