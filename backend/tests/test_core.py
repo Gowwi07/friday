@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from ai.planner import plan_reminders
+from ai.rules import try_parse_create_event
 from api import webhook
 from database.database import AsyncSessionLocal, engine
 from database.models import Base, Event, IncomingMessage, ReminderPlan, ScheduledJobRun
@@ -54,6 +55,18 @@ class TimeTests(unittest.TestCase):
         reminders = plan_reminders(future, None, "Personal", "Medium", "Message me hi")
         self.assertTrue(any(item["reminder_type"] == "at_time" for item in reminders))
 
+    def test_rules_parse_common_reminders_without_ai(self):
+        current = datetime(2026, 6, 30, 23, 26, tzinfo=IST)
+
+        study = try_parse_create_event("Tomorrow 5pm c++ study", current)
+        self.assertEqual(study["intent"], "create_event")
+        self.assertEqual(study["event"]["title"], "c++ study")
+        self.assertEqual(parse_iso_datetime(study["event"]["event_datetime"]), datetime(2026, 7, 1, 17, 0))
+
+        message = try_parse_create_event("Ok msg me a hi at 23:30", current)
+        self.assertEqual(message["event"]["title"], "Message hi")
+        self.assertEqual(parse_iso_datetime(message["event"]["event_datetime"]), datetime(2026, 6, 30, 23, 30))
+
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -89,6 +102,28 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
 
         async with AsyncSessionLocal() as db:
             plans = (await db.execute(select(ReminderPlan))).scalars().all()
+        self.assertTrue(any(plan.reminder_type == "at_time" for plan in plans))
+
+    async def test_simple_reminder_is_created_without_ai_call(self):
+        agent = AsyncMock()
+        with patch.object(webhook, "get_agent", return_value=agent), patch.object(
+            webhook, "send_whatsapp_message", new=AsyncMock(return_value=True)
+        ):
+            await webhook._process_message(
+                from_number="919999999999",
+                from_name="Test User",
+                body="Tomorrow 5pm c++ study",
+                msg_id="wamid.simple-1",
+                msg_type="text",
+                timestamp=1782840000,
+            )
+
+        agent.process_message.assert_not_called()
+        async with AsyncSessionLocal() as db:
+            event = await db.scalar(select(Event))
+            plans = (await db.execute(select(ReminderPlan))).scalars().all()
+
+        self.assertEqual(event.title, "c++ study")
         self.assertTrue(any(plan.reminder_type == "at_time" for plan in plans))
 
     async def test_daily_job_claim_is_idempotent(self):

@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from database.models import IncomingMessage, EventStatus, MessageType
 from ai.agent import get_agent
+from ai.rules import try_parse_create_event
 from services.reminder import (
     create_event_from_ai,
     mark_event_complete,
@@ -229,13 +230,16 @@ async def _process_message(
                     ai_body = f"Replying to this earlier message: {quoted_body}\nUser says: {body}"
 
             # ── Run AI Agent ───────────────────────────────────────────────
-            agent = get_agent()
-            ai_result = await agent.process_message(
-                message_body=ai_body,
-                conversation_history=history,
-                is_forwarded=is_forwarded,
-                current_datetime=now_ist(),
-            )
+            current_time = now_ist()
+            ai_result = try_parse_create_event(ai_body, current_time)
+            if not ai_result:
+                agent = get_agent()
+                ai_result = await agent.process_message(
+                    message_body=ai_body,
+                    conversation_history=history,
+                    is_forwarded=is_forwarded,
+                    current_datetime=current_time,
+                )
 
             intent = ai_result.get("intent", "ignore")
             reply = ai_result.get("reply_to_user", "")
