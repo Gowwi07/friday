@@ -89,6 +89,7 @@ async def receive_message(
             "timestamp": payload.get("timestamp", 0),
             "type": "text" if bridge_type == "chat" else bridge_type,
             "text": {"body": payload.get("body", "")},
+            "context": payload.get("context") or {},
             "_body": payload.get("body", ""),
             "_is_forwarded": bool(payload.get("is_forwarded")),
         }]
@@ -142,6 +143,7 @@ async def receive_message(
             msg_id=msg_id,
             msg_type=msg_type,
             timestamp=timestamp,
+            quoted_msg_id=(msg.get("context") or {}).get("id"),
             is_forwarded=bool(msg.get("_is_forwarded", False)),
         )
 
@@ -155,6 +157,7 @@ async def _process_message(
     msg_id: str,
     msg_type: str,
     timestamp: int,
+    quoted_msg_id: str | None = None,
     is_forwarded: bool = False,
 ):
     """
@@ -200,7 +203,9 @@ async def _process_message(
             search_keywords = [
                 "what's pending", "whats pending", "what is pending",
                 "what's on my plate", "show tasks", "pending tasks",
-                "show all", "task list", "my tasks",
+                "show all", "task list", "my tasks", "upcoming tasks",
+                "upcoming task", "what's upcoming", "whats upcoming",
+                "what is upcoming", "what are my tasks",
             ]
             if any(k in body.lower() for k in search_keywords):
                 task_list = await generate_task_list(db, from_number)
@@ -212,11 +217,21 @@ async def _process_message(
 
             # ── Get conversation history ────────────────────────────────────
             history = await get_conversation_history(db, from_number, limit=10)
+            ai_body = body
+            if quoted_msg_id:
+                quoted_body = await db.scalar(
+                    select(IncomingMessage.body).where(
+                        IncomingMessage.whatsapp_msg_id == quoted_msg_id,
+                        IncomingMessage.from_number == from_number,
+                    )
+                )
+                if quoted_body:
+                    ai_body = f"Replying to this earlier message: {quoted_body}\nUser says: {body}"
 
             # ── Run AI Agent ───────────────────────────────────────────────
             agent = get_agent()
             ai_result = await agent.process_message(
-                message_body=body,
+                message_body=ai_body,
                 conversation_history=history,
                 is_forwarded=is_forwarded,
                 current_datetime=now_ist(),

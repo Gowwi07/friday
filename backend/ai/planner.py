@@ -72,6 +72,14 @@ def plan_reminders(
                 "message_template": template,
             })
 
+    def add_at_time(template: str):
+        if ref_time > now:
+            reminders.append({
+                "scheduled_at": ref_time,
+                "reminder_type": "at_time",
+                "message_template": template,
+            })
+
     if cat in ("Placement", "Interview", "Internship"):
         # ─ High-stakes events ─
         add(timedelta(days=7), "7d_before",
@@ -94,6 +102,7 @@ def plan_reminders(
             f"🔔 *{title}* starts in 1 hour!{venue_text}")
         add(timedelta(minutes=15), "15min_before",
             f"🚨 *{title}* starts in 15 minutes!{venue_text}\nAre you on your way?")
+        add_at_time(f"🚨 *{title}* is starting now!{venue_text}")
 
     elif cat in ("Assignment", "College"):
         # ─ Deadlines ─
@@ -111,6 +120,7 @@ def plan_reminders(
             })
         add(timedelta(hours=2), "2h_before",
             f"🚨 *{title}* deadline in 2 hours!\nHave you submitted?")
+        add_at_time(f"🚨 *{title}* is due now!")
 
     elif cat in ("Bill", "Subscription", "Finance"):
         # ─ Payment deadlines ─
@@ -120,6 +130,7 @@ def plan_reminders(
             f"⚠️ *{title}* is due TOMORROW.")
         add(timedelta(hours=2), "same_day",
             f"🔴 *{title}* is due today! Don't forget to pay.")
+        add_at_time(f"🔴 *{title}* is due now. Don't forget to pay.")
 
     elif cat in ("Personal", "Health", "Family"):
         # ─ Personal appointments ─
@@ -134,6 +145,7 @@ def plan_reminders(
             })
         add(timedelta(hours=1), "1h_before",
             f"⏰ *{title}* is in 1 hour!{venue_text}")
+        add_at_time(f"⏰ Reminder: *{title}*{venue_text}")
 
     else:
         # ─ Generic ─
@@ -149,6 +161,7 @@ def plan_reminders(
             })
         add(timedelta(hours=1), "1h_before",
             f"⏰ *{title}* is in 1 hour!{venue_text}")
+        add_at_time(f"⏰ Reminder: *{title}*{venue_text}")
 
     # ─── Follow-up reminder (30 min after event) ──────────────────────────
     follow_up = ref_time + timedelta(minutes=30)

@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from ai.planner import plan_reminders
 from api import webhook
 from database.database import AsyncSessionLocal, engine
-from database.models import Base, Event, IncomingMessage, ScheduledJobRun
+from database.models import Base, Event, IncomingMessage, ReminderPlan, ScheduledJobRun
 from time_utils import IST, parse_iso_datetime
 
 
@@ -48,6 +48,11 @@ class TimeTests(unittest.TestCase):
         reminders = plan_reminders(future, None, "Personal", "Medium", "Test")
         self.assertTrue(reminders)
         self.assertTrue(all(item["scheduled_at"].tzinfo is None for item in reminders))
+
+    def test_planner_includes_at_time_reminder_for_near_term_events(self):
+        future = datetime.now(IST) + timedelta(minutes=4)
+        reminders = plan_reminders(future, None, "Personal", "Medium", "Message me hi")
+        self.assertTrue(any(item["reminder_type"] == "at_time" for item in reminders))
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -82,6 +87,10 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.priority.value, "Medium")
         sender.assert_awaited_once()
 
+        async with AsyncSessionLocal() as db:
+            plans = (await db.execute(select(ReminderPlan))).scalars().all()
+        self.assertTrue(any(plan.reminder_type == "at_time" for plan in plans))
+
     async def test_daily_job_claim_is_idempotent(self):
         from scheduler.jobs import _claim_daily_job
 
@@ -109,6 +118,7 @@ class WebhookPayloadTests(unittest.TestCase):
                         "type": "chat",
                         "timestamp": 1782840000,
                         "is_forwarded": True,
+                        "context": {"id": "quoted-1"},
                     },
                 )
 
@@ -116,6 +126,7 @@ class WebhookPayloadTests(unittest.TestCase):
         process.assert_awaited_once()
         self.assertEqual(process.await_args.kwargs["body"], "Remember this")
         self.assertTrue(process.await_args.kwargs["is_forwarded"])
+        self.assertEqual(process.await_args.kwargs["quoted_msg_id"], "quoted-1")
 
 
 if __name__ == "__main__":

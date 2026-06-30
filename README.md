@@ -48,8 +48,8 @@ uvicorn main:app --reload --port 8000
 ### 4. Connect the webhook
 
 For local testing, follow [TUNNEL.md](TUNNEL.md). For production, follow
-[SETUP.md](SETUP.md) and deploy the backend with `python deploy.py`. Register
-the resulting public `/webhook` URL in the Meta developer console.
+[SETUP.md](SETUP.md) and deploy the backend on Render using `render.yaml`.
+Register the resulting public `/webhook` URL in the Meta developer console.
 
 The `bridge/` directory is retained only as an optional legacy adapter. The
 production application uses Meta's official WhatsApp Cloud API and does not
@@ -97,7 +97,7 @@ Your WhatsApp
 Meta WhatsApp Cloud API
      │ HTTPS webhook
      ▼
-FastAPI Backend (Python / Cloud Run)
+FastAPI Backend (Python / Render Free)
      ├── Gemini 2.5 Flash AI
      │     ├── Intent Classification
      │     ├── Entity Extraction
