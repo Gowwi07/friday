@@ -38,3 +38,6 @@ bridge/.wwebjs_cache/
 # OS
 .DS_Store
 Thumbs.db
+
+# Binaries
+bin/

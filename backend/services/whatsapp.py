@@ -1,8 +1,10 @@
 """
-FRIDAY — Twilio WhatsApp API Sender
+FRIDAY — WhatsApp Business Cloud API Sender
 
-Sends messages via Twilio's API to WhatsApp.
-Uses standard HTTP POST with Basic Auth.
+Sends messages via Meta's official WhatsApp Cloud API.
+No local bridge needed — works from anywhere (Cloud Run, etc.).
+
+Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/messages
 """
 
 import httpx
@@ -14,76 +16,74 @@ from config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Meta Graph API base
+GRAPH_API_URL = "https://graph.facebook.com/v20.0"
 
-def _normalize_phone(phone: str) -> str:
+
+def _phone_to_wa_id(phone: str) -> str:
     """
-    Ensure the number has the 'whatsapp:' prefix.
-    e.g., '919876543210' -> 'whatsapp:+919876543210'
-          'whatsapp:919876543210' -> 'whatsapp:+919876543210'
-          '+919876543210' -> 'whatsapp:+919876543210'
+    Normalize phone number to WhatsApp format.
+    Accepts: '919876543210', '+919876543210', '919876543210@c.us'
+    Returns: '919876543210'
     """
-    cleaned = phone.strip()
-    if cleaned.startswith("whatsapp:"):
-        num_part = cleaned.split(":", 1)[1]
-        if not num_part.startswith("+"):
-            return f"whatsapp:+{num_part}"
-        return cleaned
-    
-    if not cleaned.startswith("+"):
-        return f"whatsapp:+{cleaned}"
-    
-    return f"whatsapp:{cleaned}"
+    return phone.replace("+", "").replace("@c.us", "").replace(" ", "").replace("whatsapp:", "").strip()
 
 
 async def send_whatsapp_message(to: str, message: str) -> bool:
     """
-    Send a WhatsApp message via Twilio.
+    Send a WhatsApp text message via Meta Cloud API.
 
     Args:
-        to: Recipient phone number (e.g. 'whatsapp:+919876543210')
-        message: The message body to send.
+        to: Recipient phone number (any format)
+        message: Text to send (supports WhatsApp markdown: *bold*, _italic_)
+
+    Returns:
+        True if sent successfully, False otherwise.
     """
     if not to:
         to = settings.my_whatsapp_number
 
     if not to:
-        logger.error("No recipient number configured. Set MY_WHATSAPP_NUMBER in .env")
+        logger.error("No recipient number. Set MY_WHATSAPP_NUMBER in .env")
         return False
 
-    if not settings.twilio_account_sid or not settings.twilio_auth_token:
-        logger.error("Twilio credentials not configured in .env")
+    if not settings.whatsapp_phone_number_id or not settings.whatsapp_access_token:
+        logger.error("WhatsApp API not configured. Set WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN in .env")
         return False
 
-    to_formatted = _normalize_phone(to)
-    from_formatted = _normalize_phone(settings.twilio_whatsapp_number)
+    wa_id = _phone_to_wa_id(to)
+    url = f"{GRAPH_API_URL}/{settings.whatsapp_phone_number_id}/messages"
 
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}/Messages.json"
-
-    # Twilio expects urlencoded form data
     payload = {
-        "To": to_formatted,
-        "From": from_formatted,
-        "Body": message,
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": wa_id,
+        "type": "text",
+        "text": {
+            "preview_url": False,
+            "body": message,
+        },
+    }
+
+    headers = {
+        "Authorization": f"Bearer {settings.whatsapp_access_token}",
+        "Content-Type": "application/json",
     }
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(
-                url,
-                data=payload,
-                auth=(settings.twilio_account_sid, settings.twilio_auth_token),
-            )
+            response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
-            logger.info(f"✅ Sent Twilio WhatsApp to {to_formatted}: {message[:60]}...")
+            logger.info(f"✅ Sent Meta WhatsApp to {wa_id[:8]}...: {message[:60]}")
             return True
     except httpx.HTTPStatusError as e:
-        logger.error(f"❌ Twilio API error {e.response.status_code}: {e.response.text}")
+        logger.error(f"❌ Meta WhatsApp API error {e.response.status_code}: {e.response.text}")
         return False
     except Exception as e:
-        logger.error(f"❌ Failed to send Twilio WhatsApp message: {e}")
+        logger.error(f"❌ Failed to send Meta WhatsApp message: {e}")
         return False
 
 
 async def send_to_me(message: str) -> bool:
-    """Shortcut to send a message to the configured personal number."""
+    """Shortcut: send a message to the configured personal number."""
     return await send_whatsapp_message(settings.my_whatsapp_number, message)

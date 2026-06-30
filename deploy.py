@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FRIDAY — Google Cloud Run Deployment Script (Twilio Edition)
+FRIDAY — Google Cloud Run Deployment Script
 
 Deploys the backend to Cloud Run with all environment variables.
 Run from the project root: python deploy.py
@@ -43,7 +43,7 @@ def get_project_id() -> str:
 
 def main():
     print("=" * 60)
-    print("  FRIDAY - Google Cloud Run Deploy (Twilio Edition)")
+    print("  FRIDAY - Google Cloud Run Deploy")
     print("=" * 60)
 
     # 1. Check project
@@ -64,7 +64,7 @@ def main():
     env = dotenv_values(ENV_FILE)
 
     # Check required vars
-    required = ["GEMINI_API_KEY", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "MY_WHATSAPP_NUMBER"]
+    required = ["GEMINI_API_KEY", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "MY_WHATSAPP_NUMBER"]
     missing = [k for k in required if not env.get(k) or "your_" in env.get(k, "")]
     if missing:
         print(f"\nERROR: Missing required .env values: {missing}")
@@ -81,9 +81,9 @@ def main():
     # 4. Build env var string for Cloud Run
     env_vars = ",".join([
         f"GEMINI_API_KEY={env['GEMINI_API_KEY']}",
-        f"TWILIO_ACCOUNT_SID={env['TWILIO_ACCOUNT_SID']}",
-        f"TWILIO_AUTH_TOKEN={env['TWILIO_AUTH_TOKEN']}",
-        f"TWILIO_WHATSAPP_NUMBER={env.get('TWILIO_WHATSAPP_NUMBER', 'whatsapp:+14155238886')}",
+        f"WHATSAPP_ACCESS_TOKEN={env['WHATSAPP_ACCESS_TOKEN']}",
+        f"WHATSAPP_PHONE_NUMBER_ID={env['WHATSAPP_PHONE_NUMBER_ID']}",
+        f"WHATSAPP_VERIFY_TOKEN={env.get('WHATSAPP_VERIFY_TOKEN', 'friday_webhook_secret_2026')}",
         f"MY_WHATSAPP_NUMBER={env['MY_WHATSAPP_NUMBER']}",
         f"DATABASE_URL={env.get('DATABASE_URL', '')}",
         "APP_ENV=production",
@@ -116,7 +116,7 @@ def main():
         "--region", REGION,
         "--format", "value(status.url)",
         "--project", project_id,
-    ], capture_output=True, text=True)
+    ], capture_output=True, text=True, shell=sys.platform == "win32")
     service_url = result.stdout.strip()
 
     print("\n" + "=" * 60)
@@ -125,7 +125,7 @@ def main():
     print(f"\n  Service URL: {service_url}")
     print(f"\n  WhatsApp Webhook URL:")
     print(f"  {service_url}/webhook")
-    print(f"\n  Next: Register this webhook URL in the Twilio Sandbox Configuration")
+    print(f"\n  Next: Register this webhook URL in the Meta Developer Settings")
     print("\n  API Docs (local): http://localhost:8000/docs")
 
 

@@ -16,13 +16,13 @@ class Settings(BaseSettings):
     # Gemini AI
     gemini_api_key: str = ""
 
-    # Twilio Configuration
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_whatsapp_number: str = "whatsapp:+14155238886"
+    # WhatsApp Business Cloud API (Meta)
+    whatsapp_access_token: str = ""
+    whatsapp_phone_number_id: str = ""
+    whatsapp_verify_token: str = "friday_webhook_secret_2026"
 
     # Your personal WhatsApp number (where FRIDAY sends reminders)
-    # Format: whatsapp:+919876543210
+    # Format: 919876543210 (no + or @c.us)
     my_whatsapp_number: str = ""
 
     # Database
