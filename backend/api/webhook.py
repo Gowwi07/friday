@@ -9,13 +9,10 @@ Meta Cloud API message format is very different from Twilio's.
 """
 
 import logging
-from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, Request, Query, HTTPException, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Request, Query, HTTPException, BackgroundTasks
+from sqlalchemy import select
 
-from database.database import get_db
 from database.models import IncomingMessage, EventStatus, MessageType
 from ai.agent import get_agent
 from services.reminder import (
@@ -28,6 +25,7 @@ from services.reminder import (
 from services.whatsapp import send_whatsapp_message
 from services.summary import generate_task_list
 from config import get_settings
+from time_utils import from_unix_timestamp, now_ist
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -59,13 +57,18 @@ async def verify_webhook(
 async def receive_message(
     request: Request,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Meta posts all incoming WhatsApp events here.
     We extract text messages and run the AI pipeline.
     """
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Webhook payload must be an object")
 
     # Meta wraps everything in entry[].changes[]
     try:
@@ -74,8 +77,22 @@ async def receive_message(
         value = changes.get("value", {})
         messages = value.get("messages", [])
         contacts = value.get("contacts", [])
-    except (IndexError, AttributeError):
-        return {"status": "ok"}  # Not a message event (e.g. status update)
+    except (IndexError, TypeError, AttributeError):
+        messages, contacts = [], []
+
+    # The optional whatsapp-web.js bridge uses a compact, flat payload.
+    if not messages and payload.get("message_id") and payload.get("from"):
+        bridge_type = payload.get("type", "chat")
+        messages = [{
+            "id": payload.get("message_id"),
+            "from": payload.get("from"),
+            "timestamp": payload.get("timestamp", 0),
+            "type": "text" if bridge_type == "chat" else bridge_type,
+            "text": {"body": payload.get("body", "")},
+            "_body": payload.get("body", ""),
+            "_is_forwarded": bool(payload.get("is_forwarded")),
+        }]
+        contacts = [{"wa_id": payload.get("from"), "profile": {"name": payload.get("from_name")}}]
 
     if not messages:
         return {"status": "ok"}  # Could be delivery/read receipts
@@ -85,7 +102,10 @@ async def receive_message(
         msg_type = msg.get("type", "text")
         from_number = msg.get("from", "")  # e.g. "919876543210"
         msg_id = msg.get("id", "")
-        timestamp = int(msg.get("timestamp", 0))
+        try:
+            timestamp = int(msg.get("timestamp", 0))
+        except (TypeError, ValueError):
+            timestamp = 0
 
         # Get contact name
         from_name = from_number
@@ -106,6 +126,8 @@ async def receive_message(
         else:
             body = f"[{msg_type} message]"
 
+        body = (msg.get("_body") or body or "").strip()
+
         if not body:
             continue
 
@@ -120,6 +142,7 @@ async def receive_message(
             msg_id=msg_id,
             msg_type=msg_type,
             timestamp=timestamp,
+            is_forwarded=bool(msg.get("_is_forwarded", False)),
         )
 
     return {"status": "ok"}
@@ -132,6 +155,7 @@ async def _process_message(
     msg_id: str,
     msg_type: str,
     timestamp: int,
+    is_forwarded: bool = False,
 ):
     """
     Full AI pipeline for a single incoming message from Meta.
@@ -140,16 +164,34 @@ async def _process_message(
 
     async with AsyncSessionLocal() as db:
         try:
+            # Meta retries webhooks. Do not create duplicate events or replies.
+            if msg_id:
+                existing = await db.scalar(
+                    select(IncomingMessage.id).where(IncomingMessage.whatsapp_msg_id == msg_id)
+                )
+                if existing:
+                    logger.info("Ignoring duplicate WhatsApp message %s", msg_id)
+                    return
+
             # ── Log raw message ────────────────────────────────────────────
+            message_type = {
+                "text": MessageType.CHAT,
+                "chat": MessageType.CHAT,
+                "image": MessageType.IMAGE,
+                "document": MessageType.DOCUMENT,
+                "audio": MessageType.AUDIO,
+                "video": MessageType.VIDEO,
+                "sticker": MessageType.STICKER,
+            }.get(msg_type, MessageType.OTHER)
             raw_msg = IncomingMessage(
                 whatsapp_msg_id=msg_id,
                 from_number=from_number,
                 from_name=from_name,
                 body=body,
-                message_type=MessageType.CHAT if msg_type == "text" else MessageType.IMAGE,
-                is_forwarded=False,
+                message_type=message_type,
+                is_forwarded=is_forwarded,
                 has_media=(msg_type != "text"),
-                timestamp=datetime.fromtimestamp(timestamp) if timestamp else None,
+                timestamp=from_unix_timestamp(timestamp) if timestamp else None,
             )
             db.add(raw_msg)
             await db.flush()
@@ -163,21 +205,21 @@ async def _process_message(
             if any(k in body.lower() for k in search_keywords):
                 task_list = await generate_task_list(db, from_number)
                 await send_whatsapp_message(from_number, task_list)
-                await save_conversation_turn(db, "user", body)
-                await save_conversation_turn(db, "assistant", task_list)
+                await save_conversation_turn(db, "user", body, user_phone=from_number)
+                await save_conversation_turn(db, "assistant", task_list, user_phone=from_number)
                 await db.commit()
                 return
 
             # ── Get conversation history ────────────────────────────────────
-            history = await get_conversation_history(db, limit=10)
+            history = await get_conversation_history(db, from_number, limit=10)
 
             # ── Run AI Agent ───────────────────────────────────────────────
             agent = get_agent()
             ai_result = await agent.process_message(
                 message_body=body,
                 conversation_history=history,
-                is_forwarded=False,
-                current_datetime=datetime.now(),
+                is_forwarded=is_forwarded,
+                current_datetime=now_ist(),
             )
 
             intent = ai_result.get("intent", "ignore")
@@ -224,9 +266,9 @@ async def _process_message(
                 raw_msg.intent = intent
 
             # ── Save conversation ───────────────────────────────────────────
-            await save_conversation_turn(db, "user", body, linked_event_id)
+            await save_conversation_turn(db, "user", body, linked_event_id, from_number)
             if reply:
-                await save_conversation_turn(db, "assistant", reply, linked_event_id)
+                await save_conversation_turn(db, "assistant", reply, linked_event_id, from_number)
 
             await db.commit()
 

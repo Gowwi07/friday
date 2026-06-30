@@ -87,6 +87,7 @@ def main():
         f"MY_WHATSAPP_NUMBER={env['MY_WHATSAPP_NUMBER']}",
         f"DATABASE_URL={env.get('DATABASE_URL', '')}",
         "APP_ENV=production",
+        "TZ=Asia/Kolkata",
         f"MORNING_BRIEF_HOUR={env.get('MORNING_BRIEF_HOUR', '7')}",
         f"MORNING_BRIEF_MINUTE={env.get('MORNING_BRIEF_MINUTE', '0')}",
         f"NIGHT_SUMMARY_HOUR={env.get('NIGHT_SUMMARY_HOUR', '22')}",
@@ -104,8 +105,9 @@ def main():
         "--set-env-vars", env_vars,
         "--memory", "512Mi",
         "--cpu", "1",
+        "--no-cpu-throttling",    # Scheduler needs CPU between HTTP requests
         "--min-instances", "1",      # Keep 1 always warm (for scheduler)
-        "--max-instances", "3",
+        "--max-instances", "1",      # Prevent duplicate in-process schedulers
         "--timeout", "60",
         "--project", project_id,
     ])

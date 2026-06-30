@@ -21,6 +21,7 @@ COPY . .
 # Cloud Run sets PORT env var (default 8080)
 ENV PORT=8080
 ENV APP_ENV=production
+ENV TZ=Asia/Kolkata
 
 # Run the FastAPI app with uvicorn
 CMD exec uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1

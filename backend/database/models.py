@@ -18,6 +18,7 @@ from sqlalchemy import (
     ForeignKey, Enum, Float
 )
 from sqlalchemy.orm import relationship, DeclarativeBase
+from time_utils import now_ist
 
 
 def _uuid():
@@ -114,8 +115,8 @@ class Event(Base):
     ai_notes = Column(Text, nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=now_ist)
+    updated_at = Column(DateTime, default=now_ist, onupdate=now_ist)
     completed_at = Column(DateTime, nullable=True)
 
     # Relationships
@@ -141,7 +142,7 @@ class ReminderPlan(Base):
     message_template = Column(Text, nullable=True)      # Pre-built message text
     status = Column(Enum(ReminderStatus), default=ReminderStatus.PENDING)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=now_ist)
     sent_at = Column(DateTime, nullable=True)
 
     event = relationship("Event", back_populates="reminder_plans")
@@ -159,7 +160,7 @@ class ReminderHistory(Base):
     id = Column(String, primary_key=True, default=_uuid)
     event_id = Column(String, ForeignKey("events.id"), nullable=False)
     message_sent = Column(Text, nullable=False)
-    sent_at = Column(DateTime, default=datetime.utcnow)
+    sent_at = Column(DateTime, default=now_ist)
     user_response = Column(Text, nullable=True)     # What user replied
     response_at = Column(DateTime, nullable=True)
 
@@ -190,7 +191,7 @@ class IncomingMessage(Base):
     linked_event_id = Column(String, ForeignKey("events.id"), nullable=True)
 
     timestamp = Column(DateTime, nullable=True)
-    received_at = Column(DateTime, default=datetime.utcnow)
+    received_at = Column(DateTime, default=now_ist)
 
 
 class ConversationMemory(Base):
@@ -203,5 +204,16 @@ class ConversationMemory(Base):
     id = Column(String, primary_key=True, default=_uuid)
     role = Column(String(20), nullable=False)        # "user" or "assistant"
     content = Column(Text, nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    user_phone = Column(String(50), nullable=True)
+    timestamp = Column(DateTime, default=now_ist)
     linked_event_id = Column(String, nullable=True)  # Which event this relates to
+
+
+class ScheduledJobRun(Base):
+    """Idempotency record for daily jobs invoked by a free external scheduler."""
+    __tablename__ = "scheduled_job_runs"
+
+    job_key = Column(String(100), primary_key=True)
+    job_name = Column(String(50), nullable=False)
+    run_date = Column(String(10), nullable=False)
+    created_at = Column(DateTime, default=now_ist)

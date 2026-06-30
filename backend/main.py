@@ -5,14 +5,15 @@ Entry point for the backend server.
 """
 
 import logging
+import hmac
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
 from database.database import init_db
-from scheduler.jobs import start_scheduler, stop_scheduler
+from scheduler.jobs import start_scheduler, stop_scheduler, run_maintenance
 from api.webhook import router as webhook_router
 from api.events import router as events_router
 
@@ -79,3 +80,13 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/maintenance", include_in_schema=False)
+async def maintenance(x_cron_secret: str = Header(default="")):
+    """Protected wake-up endpoint used by GitHub Actions on free hosting."""
+    if not settings.cron_secret or not hmac.compare_digest(
+        x_cron_secret, settings.cron_secret
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return await run_maintenance()

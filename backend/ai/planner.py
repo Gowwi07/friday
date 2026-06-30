@@ -10,6 +10,7 @@ from typing import Optional
 import logging
 
 from database.models import EventCategory, EventPriority
+from time_utils import now_ist, to_ist_naive
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ def plan_reminders(
     - Personal/Health: 1d, morning, 1h before
     - Recurring: just the morning of
     """
-    now = datetime.now()
+    now = now_ist()
     reminders = []
     ref_time = event_datetime or deadline
 
@@ -49,6 +50,7 @@ def plan_reminders(
         logger.warning(f"No datetime for event '{title}', skipping reminder planning.")
         return []
 
+    ref_time = to_ist_naive(ref_time)
     if ref_time < now:
         logger.warning(f"Event '{title}' is in the past, skipping.")
         return []

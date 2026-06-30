@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Event, EventStatus, EventPriority
+from time_utils import now_ist
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ async def generate_morning_brief(db: AsyncSession, user_phone: str) -> str:
     """
     Generate a morning brief showing today's tasks and upcoming events for a specific user.
     """
-    now = datetime.now()
+    now = now_ist()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = now.replace(hour=23, minute=59, second=59)
     tomorrow_end = today_end + timedelta(days=1)
@@ -102,7 +103,7 @@ async def generate_night_summary(db: AsyncSession, user_phone: str) -> str:
     """
     Generate an end-of-day summary for a specific user.
     """
-    now = datetime.now()
+    now = now_ist()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Completed today
@@ -170,7 +171,7 @@ async def generate_task_list(db: AsyncSession, user_phone: str) -> str:
     """
     Generate a response to 'What's pending?' or 'What's on my plate?' for a specific user.
     """
-    now = datetime.now()
+    now = now_ist()
 
     result = await db.execute(
         select(Event)

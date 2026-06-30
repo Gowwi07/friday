@@ -10,21 +10,20 @@ FRIDAY is an AI-powered personal secretary that lives in WhatsApp. Forward any m
 
 ### Prerequisites
 - Python 3.11+
-- Node.js 18+
 - A Gemini API key (free at https://aistudio.google.com)
+- A Meta WhatsApp Business app and Cloud API credentials
+- A PostgreSQL database for deployment (Neon works well)
 
 ### 1. Configure Environment
 
 **Backend** — edit `backend/.env`:
 ```env
 GEMINI_API_KEY=your_key_here
-MY_WHATSAPP_NUMBER=91XXXXXXXXXX@c.us
-```
-
-**Bridge** — edit `bridge/.env`:
-```env
-BACKEND_URL=http://localhost:8000
-BRIDGE_PORT=3000
+WHATSAPP_ACCESS_TOKEN=your_meta_access_token
+WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
+WHATSAPP_VERIFY_TOKEN=choose_a_private_verify_token
+MY_WHATSAPP_NUMBER=91XXXXXXXXXX
+DATABASE_URL=postgresql+asyncpg://...
 ```
 
 ### 2. Install Dependencies
@@ -35,10 +34,6 @@ cd backend
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
-
-# Bridge (Node.js)
-cd ..\bridge
-npm install
 ```
 
 ### 3. Start FRIDAY
@@ -50,17 +45,15 @@ cd backend
 uvicorn main:app --reload --port 8000
 ```
 
-**Terminal 2 — WhatsApp Bridge:**
-```powershell
-cd bridge
-npm start
-```
+### 4. Connect the webhook
 
-### 4. Scan QR Code
-When the bridge starts, a QR code appears in the terminal.
-Open WhatsApp → Settings → Linked Devices → Link a Device → scan the QR.
+For local testing, follow [TUNNEL.md](TUNNEL.md). For production, follow
+[SETUP.md](SETUP.md) and deploy the backend with `python deploy.py`. Register
+the resulting public `/webhook` URL in the Meta developer console.
 
-FRIDAY is now live! 🎉
+The `bridge/` directory is retained only as an optional legacy adapter. The
+production application uses Meta's official WhatsApp Cloud API and does not
+require a QR code or a continuously running browser.
 
 ---
 
@@ -101,15 +94,15 @@ What's pending?
 Your WhatsApp
      │
      ▼
-whatsapp-web.js Bridge (Node.js :3000)
-     │ HTTP POST /webhook
+Meta WhatsApp Cloud API
+     │ HTTPS webhook
      ▼
-FastAPI Backend (Python :8000)
-     ├── Gemini 2.0 Flash AI
+FastAPI Backend (Python / Cloud Run)
+     ├── Gemini 2.5 Flash AI
      │     ├── Intent Classification
      │     ├── Entity Extraction
      │     └── Reminder Planning
-     ├── SQLite Database
+     ├── PostgreSQL / SQLite Database
      │     ├── Events
      │     ├── Reminder Plans
      │     └── Conversation Memory
@@ -129,7 +122,7 @@ Visit http://localhost:8000/docs for interactive Swagger UI.
 ## Project Structure
 ```
 FRIDAY/
-├── bridge/           ← Node.js WhatsApp bridge
+├── bridge/           ← optional legacy local adapter
 │   ├── index.js
 │   └── package.json
 ├── backend/          ← Python FastAPI backend

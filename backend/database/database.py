@@ -3,6 +3,7 @@ FRIDAY — Database Connection & Session Management
 Supports both SQLite (local dev) and PostgreSQL/Neon (production).
 """
 
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from database.models import Base
 from config import get_settings
@@ -30,6 +31,17 @@ async def init_db():
     """Create all tables on startup."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # create_all does not add columns to an existing database. Keep this
+        # small backwards-compatible migration here until Alembic is adopted.
+        def has_memory_user_phone(sync_conn) -> bool:
+            columns = inspect(sync_conn).get_columns("conversation_memory")
+            return any(column["name"] == "user_phone" for column in columns)
+
+        if not await conn.run_sync(has_memory_user_phone):
+            await conn.execute(
+                text("ALTER TABLE conversation_memory ADD COLUMN user_phone VARCHAR(50)")
+            )
 
 
 async def get_db():

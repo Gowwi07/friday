@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_name: str = "FRIDAY"
     app_env: str = "development"
     log_level: str = "INFO"
+    cron_secret: str = ""
 
     # Gemini AI
     gemini_api_key: str = ""
