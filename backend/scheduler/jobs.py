@@ -2,9 +2,9 @@
 FRIDAY — APScheduler Jobs
 
 Scheduled tasks:
-1. check_reminders()  — runs every minute, fires due reminders
-2. morning_brief()    — runs at configured hour (default 7 AM)
-3. night_summary()    — runs at configured hour (default 10 PM)
+1. check_reminders()  — runs every minute, fires due reminders to their creators
+2. morning_brief()    — sends personalized briefs to all active users
+3. night_summary()    — sends personalized summaries to all active users
 """
 
 import logging
@@ -16,7 +16,7 @@ from sqlalchemy import select, update
 
 from database.database import AsyncSessionLocal
 from database.models import ReminderPlan, ReminderHistory, Event, EventStatus, ReminderStatus
-from services.whatsapp import send_to_me
+from services.whatsapp import send_whatsapp_message
 from services.summary import generate_morning_brief, generate_night_summary
 from config import get_settings
 
@@ -28,10 +28,10 @@ scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
 
 async def check_reminders():
     """
-    Runs every minute. Checks for due reminder plans and sends them.
+    Runs every minute. Checks for due reminder plans and sends them to the event creator.
     """
     now = datetime.now()
-    window_end = now + timedelta(minutes=1)  # Look slightly ahead
+    window_end = now + timedelta(minutes=1)
 
     async with AsyncSessionLocal() as db:
         try:
@@ -47,13 +47,12 @@ async def check_reminders():
             due_plans = result.scalars().all()
 
             for plan in due_plans:
-                # Get the event
                 event_result = await db.get(Event, plan.event_id)
-                if not event_result:
+                if not event_result or not event_result.user_phone:
                     continue
 
                 message = plan.message_template or f"⏰ Reminder: *{event_result.title}*"
-                success = await send_to_me(message)
+                success = await send_whatsapp_message(event_result.user_phone, message)
 
                 if success:
                     plan.status = ReminderStatus.SENT
@@ -66,10 +65,10 @@ async def check_reminders():
                         sent_at=now,
                     )
                     db.add(history)
-                    logger.info(f"📤 Sent reminder '{plan.reminder_type}' for '{event_result.title}'")
+                    logger.info(f"📤 Sent reminder '{plan.reminder_type}' to {event_result.user_phone} for '{event_result.title}'")
                 else:
                     plan.status = ReminderStatus.FAILED
-                    logger.warning(f"❌ Failed to send reminder for '{event_result.title}'")
+                    logger.warning(f"❌ Failed to send reminder to {event_result.user_phone} for '{event_result.title}'")
 
             if due_plans:
                 await db.commit()
@@ -77,24 +76,41 @@ async def check_reminders():
             logger.error(f"Error in check_reminders: {e}")
 
 
+async def _get_all_active_users(db) -> list[str]:
+    """Query database to find all phone numbers that have interacted with FRIDAY."""
+    result = await db.execute(
+        select(Event.user_phone).distinct().where(Event.user_phone.isnot(None))
+    )
+    phones = list(result.scalars().all())
+    
+    # Also default to settings number if not present
+    if settings.my_whatsapp_number and settings.my_whatsapp_number not in phones:
+        phones.append(settings.my_whatsapp_number)
+    return phones
+
+
 async def send_morning_brief():
-    """Send morning agenda to the user."""
-    logger.info("🌅 Sending morning brief...")
+    """Send personalized morning agenda to all active users."""
+    logger.info("🌅 Sending morning briefs...")
     async with AsyncSessionLocal() as db:
         try:
-            message = await generate_morning_brief(db)
-            await send_to_me(message)
+            users = await _get_all_active_users(db)
+            for user in users:
+                message = await generate_morning_brief(db, user)
+                await send_whatsapp_message(user, message)
         except Exception as e:
             logger.error(f"Error in morning brief: {e}")
 
 
 async def send_night_summary():
-    """Send end-of-day summary to the user."""
-    logger.info("🌙 Sending night summary...")
+    """Send personalized end-of-day summary to all active users."""
+    logger.info("🌙 Sending night summaries...")
     async with AsyncSessionLocal() as db:
         try:
-            message = await generate_night_summary(db)
-            await send_to_me(message)
+            users = await _get_all_active_users(db)
+            for user in users:
+                message = await generate_night_summary(db, user)
+                await send_whatsapp_message(user, message)
         except Exception as e:
             logger.error(f"Error in night summary: {e}")
 

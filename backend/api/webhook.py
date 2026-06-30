@@ -161,7 +161,7 @@ async def _process_message(
                 "show all", "task list", "my tasks",
             ]
             if any(k in body.lower() for k in search_keywords):
-                task_list = await generate_task_list(db)
+                task_list = await generate_task_list(db, from_number)
                 await send_whatsapp_message(from_number, task_list)
                 await save_conversation_turn(db, "user", body)
                 await save_conversation_turn(db, "assistant", task_list)
@@ -215,7 +215,7 @@ async def _process_message(
                         reply = f"✅ Got it! *{event.title}* marked as completed."
 
             elif intent == "search":
-                task_list = await generate_task_list(db)
+                task_list = await generate_task_list(db, from_number)
                 reply = task_list
                 raw_msg.intent = "search"
                 raw_msg.processed = True

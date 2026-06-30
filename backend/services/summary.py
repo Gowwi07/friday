@@ -1,7 +1,6 @@
 """
 FRIDAY — Daily Summary Service
-
-Generates morning brief and night summary messages.
+Generates personalized morning brief and night summary messages per user.
 """
 
 import logging
@@ -21,19 +20,22 @@ PRIORITY_EMOJI = {
 }
 
 
-async def generate_morning_brief(db: AsyncSession) -> str:
+async def generate_morning_brief(db: AsyncSession, user_phone: str) -> str:
     """
-    Generate a morning brief showing today's tasks and upcoming events.
+    Generate a morning brief showing today's tasks and upcoming events for a specific user.
     """
     now = datetime.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = now.replace(hour=23, minute=59, second=59)
     tomorrow_end = today_end + timedelta(days=1)
 
-    # Get active events
+    # Get active events for this user
     result = await db.execute(
         select(Event)
-        .where(Event.status == EventStatus.ACTIVE)
+        .where(
+            Event.status == EventStatus.ACTIVE,
+            Event.user_phone == user_phone
+        )
         .order_by(Event.event_datetime.asc().nullslast(), Event.deadline.asc().nullslast())
     )
     events = result.scalars().all()
@@ -96,9 +98,9 @@ async def generate_morning_brief(db: AsyncSession) -> str:
     return "\n".join(lines)
 
 
-async def generate_night_summary(db: AsyncSession) -> str:
+async def generate_night_summary(db: AsyncSession, user_phone: str) -> str:
     """
-    Generate an end-of-day summary.
+    Generate an end-of-day summary for a specific user.
     """
     now = datetime.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -109,6 +111,7 @@ async def generate_night_summary(db: AsyncSession) -> str:
         .where(
             Event.status == EventStatus.COMPLETED,
             Event.completed_at >= today_start,
+            Event.user_phone == user_phone
         )
     )
     completed = result.scalars().all()
@@ -116,7 +119,10 @@ async def generate_night_summary(db: AsyncSession) -> str:
     # Still active + past
     result2 = await db.execute(
         select(Event)
-        .where(Event.status == EventStatus.ACTIVE)
+        .where(
+            Event.status == EventStatus.ACTIVE,
+            Event.user_phone == user_phone
+        )
         .order_by(Event.event_datetime.asc().nullslast())
     )
     active = result2.scalars().all()
@@ -160,15 +166,18 @@ async def generate_night_summary(db: AsyncSession) -> str:
     return "\n".join(lines)
 
 
-async def generate_task_list(db: AsyncSession) -> str:
+async def generate_task_list(db: AsyncSession, user_phone: str) -> str:
     """
-    Generate a response to 'What's pending?' or 'What's on my plate?'
+    Generate a response to 'What's pending?' or 'What's on my plate?' for a specific user.
     """
     now = datetime.now()
 
     result = await db.execute(
         select(Event)
-        .where(Event.status == EventStatus.ACTIVE)
+        .where(
+            Event.status == EventStatus.ACTIVE,
+            Event.user_phone == user_phone
+        )
         .order_by(Event.event_datetime.asc().nullslast(), Event.deadline.asc().nullslast())
     )
     events = result.scalars().all()
