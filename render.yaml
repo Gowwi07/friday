@@ -1,0 +1,33 @@
+# FRIDAY — Render Deployment Configuration
+# This file allows one-click setup on Render (https://render.com)
+
+services:
+  - type: web
+    name: friday-backend
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: free
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false  # You will enter this in the Render dashboard
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        value: whatsapp:+14155238886
+      - key: MY_WHATSAPP_NUMBER
+        sync: false
+      - key: DATABASE_URL
+        sync: false  # Paste your Neon PostgreSQL connection string here
+      - key: APP_ENV
+        value: production
+      - key: MORNING_BRIEF_HOUR
+        value: 7
+      - key: MORNING_BRIEF_MINUTE
+        value: 0
+      - key: NIGHT_SUMMARY_HOUR
+        value: 22
+      - key: NIGHT_SUMMARY_MINUTE
+        value: 0
