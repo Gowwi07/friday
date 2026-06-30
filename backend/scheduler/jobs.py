@@ -12,13 +12,18 @@ from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import select, update
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from database.database import AsyncSessionLocal
-from database.models import ReminderPlan, ReminderHistory, Event, EventStatus, ReminderStatus
+from database.models import (
+    ReminderPlan, ReminderHistory, Event, EventStatus, ReminderStatus,
+    ScheduledJobRun,
+)
 from services.whatsapp import send_whatsapp_message
 from services.summary import generate_morning_brief, generate_night_summary
 from config import get_settings
+from time_utils import now_ist
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -30,7 +35,7 @@ async def check_reminders():
     """
     Runs every minute. Checks for due reminder plans and sends them to the event creator.
     """
-    now = datetime.now()
+    now = now_ist()
     window_end = now + timedelta(minutes=1)
 
     async with AsyncSessionLocal() as db:
@@ -89,8 +94,27 @@ async def _get_all_active_users(db) -> list[str]:
     return phones
 
 
+async def _claim_daily_job(job_name: str) -> bool:
+    """Ensure daily summaries run once even when both cron systems wake up."""
+    today = now_ist().date().isoformat()
+    async with AsyncSessionLocal() as db:
+        db.add(ScheduledJobRun(
+            job_key=f"{job_name}:{today}",
+            job_name=job_name,
+            run_date=today,
+        ))
+        try:
+            await db.commit()
+            return True
+        except IntegrityError:
+            await db.rollback()
+            return False
+
+
 async def send_morning_brief():
     """Send personalized morning agenda to all active users."""
+    if not await _claim_daily_job("morning_brief"):
+        return
     logger.info("🌅 Sending morning briefs...")
     async with AsyncSessionLocal() as db:
         try:
@@ -104,6 +128,8 @@ async def send_morning_brief():
 
 async def send_night_summary():
     """Send personalized end-of-day summary to all active users."""
+    if not await _claim_daily_job("night_summary"):
+        return
     logger.info("🌙 Sending night summaries...")
     async with AsyncSessionLocal() as db:
         try:
@@ -165,3 +191,20 @@ def stop_scheduler():
     if scheduler.running:
         scheduler.shutdown()
         logger.info("⏰ Scheduler stopped.")
+
+
+async def run_maintenance() -> dict:
+    """Run work that must survive free-host sleep/wake cycles."""
+    await check_reminders()
+    now = now_ist()
+    morning_due = (now.hour, now.minute) >= (
+        settings.morning_brief_hour, settings.morning_brief_minute
+    )
+    night_due = (now.hour, now.minute) >= (
+        settings.night_summary_hour, settings.night_summary_minute
+    )
+    if morning_due:
+        await send_morning_brief()
+    if night_due:
+        await send_night_summary()
+    return {"status": "ok", "checked_at": now.isoformat()}

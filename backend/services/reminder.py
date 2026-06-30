@@ -17,6 +17,7 @@ from database.models import (
     EventStatus, ReminderStatus, EventCategory, EventPriority
 )
 from ai.planner import plan_reminders
+from time_utils import now_ist, parse_iso_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -35,22 +36,20 @@ async def create_event_from_ai(
     if not event_data:
         return None
 
-    # Parse datetimes
-    def parse_dt(val) -> Optional[datetime]:
-        if not val:
-            return None
-        try:
-            return datetime.fromisoformat(val.replace("Z", "+00:00"))
-        except Exception:
-            return None
+    category = event_data.get("category")
+    if category not in {item.value for item in EventCategory}:
+        category = EventCategory.MISCELLANEOUS
+    priority = event_data.get("priority")
+    if priority not in {item.value for item in EventPriority}:
+        priority = EventPriority.MEDIUM
 
     event = Event(
         title=event_data.get("title", "Untitled"),
         description=event_data.get("description"),
-        category=event_data.get("category", EventCategory.MISCELLANEOUS),
-        priority=event_data.get("priority", EventPriority.MEDIUM),
-        event_datetime=parse_dt(event_data.get("event_datetime")),
-        deadline=parse_dt(event_data.get("deadline")),
+        category=category,
+        priority=priority,
+        event_datetime=parse_iso_datetime(event_data.get("event_datetime")),
+        deadline=parse_iso_datetime(event_data.get("deadline")),
         venue=event_data.get("venue"),
         link=event_data.get("link"),
         contact=event_data.get("contact"),
@@ -99,7 +98,7 @@ async def mark_event_complete(
 ) -> None:
     """Mark an event as completed and cancel pending reminders."""
     event.status = EventStatus.COMPLETED
-    event.completed_at = datetime.utcnow()
+    event.completed_at = now_ist()
 
     # Cancel all pending reminders except follow-ups already sent
     result = await db.execute(
@@ -160,12 +159,14 @@ async def save_conversation_turn(
     role: str,
     content: str,
     linked_event_id: Optional[str] = None,
+    user_phone: Optional[str] = None,
 ) -> None:
     """Append a message to conversation memory."""
     mem = ConversationMemory(
         role=role,
         content=content,
         linked_event_id=linked_event_id,
+        user_phone=user_phone,
     )
     db.add(mem)
     await db.commit()
@@ -173,11 +174,13 @@ async def save_conversation_turn(
 
 async def get_conversation_history(
     db: AsyncSession,
+    user_phone: str,
     limit: int = 10,
 ) -> list[dict]:
     """Fetch recent conversation history for AI context."""
     result = await db.execute(
         select(ConversationMemory)
+        .where(ConversationMemory.user_phone == user_phone)
         .order_by(ConversationMemory.timestamp.desc())
         .limit(limit)
     )

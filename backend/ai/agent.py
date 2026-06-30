@@ -15,6 +15,7 @@ from google import genai
 from google.genai import types
 
 from config import get_settings
+from time_utils import now_ist, to_ist_naive
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -126,7 +127,9 @@ Respond with the JSON schema described in your instructions."""
     ) -> dict:
         """Process an incoming WhatsApp message. Returns structured dict."""
         if current_datetime is None:
-            current_datetime = datetime.now()
+            current_datetime = now_ist()
+        else:
+            current_datetime = to_ist_naive(current_datetime)
 
         prompt = self._build_prompt(
             message_body=message_body,
@@ -143,10 +146,13 @@ Respond with the JSON schema described in your instructions."""
                     system_instruction=SYSTEM_PROMPT,
                     temperature=0.1,
                     max_output_tokens=2048,
+                    response_mime_type="application/json",
                 ),
             )
 
-            raw_text = response.text.strip()
+            raw_text = (response.text or "").strip()
+            if not raw_text:
+                raise ValueError("Gemini returned an empty response")
 
             # Strip markdown code fences if present
             json_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw_text)
@@ -157,7 +163,7 @@ Respond with the JSON schema described in your instructions."""
             logger.info(f"AI intent: {result.get('intent')} confidence: {result.get('confidence')}")
             return result
 
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Failed to parse Gemini JSON: {e}\nRaw: {raw_text[:300]}")
             return {
                 "intent": "clarify",

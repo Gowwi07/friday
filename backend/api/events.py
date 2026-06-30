@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.database import get_db
 from database.models import Event, ReminderPlan, EventStatus
+from time_utils import now_ist
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -74,7 +75,7 @@ async def complete_event(event_id: str, db: AsyncSession = Depends(get_db)):
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
     event.status = EventStatus.COMPLETED
-    event.completed_at = datetime.utcnow()
+    event.completed_at = now_ist()
     await db.commit()
     return {"status": "ok", "message": f"'{event.title}' marked complete"}
 
