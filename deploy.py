@@ -115,6 +115,9 @@ def main():
         f"MORNING_BRIEF_MINUTE={env.get('MORNING_BRIEF_MINUTE', '0')}",
         f"NIGHT_SUMMARY_HOUR={env.get('NIGHT_SUMMARY_HOUR', '22')}",
         f"NIGHT_SUMMARY_MINUTE={env.get('NIGHT_SUMMARY_MINUTE', '0')}",
+        f"FALLBACK_API_KEYS={env.get('FALLBACK_API_KEYS', '')}",
+        f"FALLBACK_BASE_URL={env.get('FALLBACK_BASE_URL', '')}",
+        f"FALLBACK_MODEL={env.get('FALLBACK_MODEL', '')}",
     ])
 
     # 5. Deploy to Cloud Run

@@ -291,7 +291,13 @@ async def _process_message(
             current_time = now_ist()
             agent = get_agent()
 
-            if agent.client:
+            # Try local rules first (before calling Gemini) to save API quota
+            local_result = try_parse_local_intent(ai_body, current_time)
+            if local_result and local_result.get("confidence", 0) >= 0.85:
+                logger.info("Local rule matched with high confidence (%.2f). Bypassing Gemini.", local_result.get("confidence"))
+                ai_result = local_result
+            elif agent.client:
+                # Call Gemini (which internally falls back to rotating API keys if primary fails)
                 ai_result = await agent.process_message(
                     message_body=ai_body,
                     conversation_history=history,
@@ -299,18 +305,17 @@ async def _process_message(
                     is_forwarded=is_forwarded,
                     current_datetime=current_time,
                 )
-                # If Gemini is uncertain, let local rules have a try
+                # If Gemini is uncertain, check if local rules had any match we can fall back to
                 if (
                     ai_result.get("intent") in ("ignore", "clarify")
                     and ai_result.get("confidence", 0) < 0.5
+                    and local_result
                 ):
-                    local = try_parse_local_intent(ai_body, current_time)
-                    if local and local.get("confidence", 0) >= 0.85:
-                        logger.info("Local rule overrode low-confidence Gemini result")
-                        ai_result = local
+                    logger.info("Gemini returned low confidence. Falling back to local result.")
+                    ai_result = local_result
             else:
-                # Fallback: no Gemini key configured
-                ai_result = try_parse_local_intent(ai_body, current_time) or {
+                # Fallback: no Gemini key configured and local rules didn't have high confidence
+                ai_result = local_result or {
                     "intent": "ignore",
                     "confidence": 0.0,
                     "reply_to_user": "",

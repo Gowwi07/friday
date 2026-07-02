@@ -44,3 +44,10 @@ services:
         sync: false
       - key: CRON_SECRET
         sync: false
+      # Fallback LLM APIs
+      - key: FALLBACK_API_KEYS
+        value: "sk-jAnj6nCkKIeP88wLm2b8dSz3jgv2oGRSuX6MQriJpZC45Qyu,sk-B8ZObuRLKy0KZ3END5Gso7uOTD6IoAdVBbLH3Zl5rU5w5WqL,sk-7RlPueIsQY4eSfC6AgtSON6OZ8PAIOEnHKsNNBO6s9bIt1Ya,sk-x0MhUOOGSqDMnGsPJcuAljIDxM6XOdjylgDPfKiC8AoHxtf6,sk-10p8ZI2fyeuhP7WFDGf9zbe9UenLQneyF18HT6ctjlN2jFqn,sk-pikPeGyScDDgPgeiwvpCmRXl978HwsW7bm0c4iSDRXmJC2Nc"
+      - key: FALLBACK_BASE_URL
+        value: "https://aiapiv2.pekpik.com/v1"
+      - key: FALLBACK_MODEL
+        value: "gemini-2.5-flash"

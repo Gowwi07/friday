@@ -166,29 +166,42 @@ Respond with JSON only."""
         )
 
         try:
-            response = await self.client.aio.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.1,
-                    max_output_tokens=2048,
-                    response_mime_type="application/json",
-                ),
-            )
+            # List of primary models to try on the primary key (ordered by quota availability)
+            models_to_try = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash"]
+            last_exception = None
+            raw_text = ""
 
-            raw_text = (response.text or "").strip()
-            if not raw_text:
-                raise ValueError("Gemini returned empty response")
+            for model in models_to_try:
+                try:
+                    response = await self.client.aio.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.1,
+                            max_output_tokens=2048,
+                            response_mime_type="application/json",
+                        ),
+                    )
 
-            # Strip markdown code fences if present
-            json_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw_text)
-            if json_match:
-                raw_text = json_match.group(1)
+                    raw_text = (response.text or "").strip()
+                    if not raw_text:
+                        raise ValueError("Gemini returned empty response")
 
-            result = json.loads(raw_text)
-            logger.info("AI intent=%s confidence=%s", result.get("intent"), result.get("confidence"))
-            return result
+                    # Strip markdown code fences if present
+                    json_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw_text)
+                    if json_match:
+                        raw_text = json_match.group(1)
+
+                    result = json.loads(raw_text)
+                    logger.info("AI intent=%s confidence=%s model=%s", result.get("intent"), result.get("confidence"), model)
+                    return result
+                except Exception as model_err:
+                    logger.warning("Primary model %s failed: %s", model, model_err)
+                    last_exception = model_err
+
+            # Raise the last exception to trigger the fallback API keys block in the outer try-except
+            raise last_exception or Exception("All primary models failed")
 
         except (json.JSONDecodeError, ValueError) as e:
             logger.error("Failed to parse Gemini JSON: %s\nRaw: %s", e, raw_text[:300])
@@ -200,6 +213,49 @@ Respond with JSON only."""
             }
         except Exception as e:
             logger.error("Gemini API error: %s", e)
+
+            # Try custom fallback API keys if configured
+            if settings.fallback_api_keys:
+                keys = [k.strip() for k in settings.fallback_api_keys.split(",") if k.strip()]
+                for key in keys:
+                    logger.info("Attempting fallback with model %s...", settings.fallback_model)
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient() as http_client:
+                            response = await http_client.post(
+                                f"{settings.fallback_base_url.rstrip('/')}/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json={
+                                    "model": settings.fallback_model,
+                                    "messages": [
+                                        {"role": "system", "content": SYSTEM_PROMPT},
+                                        {"role": "user", "content": prompt},
+                                    ],
+                                    "temperature": 0.1,
+                                    "response_format": {"type": "json_object"}
+                                },
+                                timeout=15.0,
+                            )
+                            if response.status_code == 200:
+                                res_json = response.json()
+                                raw_text = res_json["choices"][0]["message"]["content"].strip()
+
+                                # Strip markdown code fences if present
+                                json_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw_text)
+                                if json_match:
+                                    raw_text = json_match.group(1)
+
+                                result = json.loads(raw_text)
+                                logger.info("Fallback AI intent=%s confidence=%s", result.get("intent"), result.get("confidence"))
+                                return result
+                            else:
+                                logger.warning("Fallback key failed with status code %d: %s", response.status_code, response.text[:200])
+                    except Exception as fallback_err:
+                        logger.error("Error using fallback key: %s", fallback_err)
+
             err_str = str(e).lower()
             reply = "I'm having a bit of trouble connecting to my brain right now. Please try again in a moment."
             if "429" in err_str or "resource_exhausted" in err_str:

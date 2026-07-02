@@ -109,6 +109,16 @@ class TimeTests(unittest.TestCase):
         self.assertEqual(result["intent"], "complete_task")
         self.assertEqual(result["matched_event_hint"], "core assessment")
 
+    def test_rules_parse_bulk_completion_without_ai(self):
+        current = datetime(2026, 7, 2, 19, 52, tzinfo=IST)
+        result = try_parse_local_intent("Delete the tasks which are done", current)
+        self.assertEqual(result["intent"], "bulk_complete")
+        self.assertEqual(result["bulk_scope"], "overdue")
+
+        result2 = try_parse_local_intent("clear completed tasks", current)
+        self.assertEqual(result2["intent"], "bulk_complete")
+        self.assertEqual(result2["bulk_scope"], "overdue")
+
     def test_rules_weekly_plan_routes_to_search(self):
         """'weekly plan' message should resolve to search intent without Gemini."""
         current = datetime(2026, 7, 2, 10, 0, tzinfo=IST)
@@ -405,6 +415,82 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         async with AsyncSessionLocal() as db:
             count = await db.scalar(select(func.count()).select_from(ScheduledJobRun))
         self.assertEqual(count, 1)
+
+    async def test_pipeline_bypasses_gemini_for_local_intents(self):
+        # Even if a real Gemini agent is configured, a simple "Done" or "What's pending"
+        # should match local rules with high confidence and bypass the LLM completely.
+        agent = FakeAgent()
+        # Mock process_message to raise an error if it's ever called
+        agent.process_message = AsyncMock(side_effect=RuntimeError("LLM should not be called!"))
+
+        with patch.object(webhook, "get_agent", return_value=agent), patch.object(
+            webhook, "send_whatsapp_message", new=AsyncMock(return_value=True)
+        ):
+            # This should complete the task locally and bypass LLM
+            await webhook._process_message(
+                from_number="919999999999",
+                from_name="Test User",
+                body="Done",
+                msg_id="wamid.bypass-1",
+                msg_type="text",
+                timestamp=1782840000,
+            )
+
+            # process_message should not have been called
+            agent.process_message.assert_not_called()
+
+    async def test_fallback_key_rotation_on_gemini_error(self):
+        from config import get_settings
+        settings = get_settings()
+
+        # Configure fallback settings for the test
+        settings.fallback_api_keys = "key1, key2"
+        settings.fallback_base_url = "https://aiapiv2.pekpik.com/v1"
+        settings.fallback_model = "gemini-2.5-flash"
+
+        # Mock httpx POST request to return success for the second key
+        class MockResponse:
+            def __init__(self, status_code, json_data):
+                self.status_code = status_code
+                self.json_data = json_data
+            def json(self):
+                return self.json_data
+            @property
+            def text(self):
+                return str(self.json_data)
+
+        mock_post = AsyncMock()
+        # First key fails (e.g. 401), second key succeeds (200)
+        mock_post.side_effect = [
+            MockResponse(401, {"error": "Invalid Key"}),
+            MockResponse(200, {
+                "choices": [{
+                    "message": {
+                        "content": '{"intent": "chat", "confidence": 0.9, "reply_to_user": "Hello from fallback!"}'
+                    }
+                }]
+            })
+        ]
+
+        from ai.agent import FridayAgent
+        agent = FridayAgent()
+        # Force the primary client generate_content call to throw a 429
+        agent.client = AsyncMock()
+        agent.client.aio = AsyncMock()
+        agent.client.aio.models = AsyncMock()
+        agent.client.aio.models.generate_content = AsyncMock(side_effect=Exception("429 Resource Exhausted"))
+
+        with patch("httpx.AsyncClient.post", new=mock_post):
+            result = await agent.process_message(
+                message_body="Hello",
+                conversation_history=[],
+                current_datetime=datetime.now()
+            )
+
+        self.assertEqual(result["intent"], "chat")
+        self.assertEqual(result["reply_to_user"], "Hello from fallback!")
+        # Both keys should have been tried (first key post, then second key post)
+        self.assertEqual(mock_post.call_count, 2)
 
 
 class WebhookPayloadTests(unittest.TestCase):

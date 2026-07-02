@@ -51,6 +51,10 @@ UPDATE_RE = re.compile(
     r"\b(updated?|changed?|rescheduled|postponed|new venue|venue changed|time changed)\b",
     re.IGNORECASE,
 )
+BULK_COMPLETE_RE = re.compile(
+    r"\b(delete|clear|remove|dismiss|complete|mark)\b.*\b(completed?|done|ended|past|overdue)\b",
+    re.IGNORECASE,
+)
 
 MONTHS = {
     "jan": 1, "january": 1,
@@ -286,6 +290,17 @@ def try_parse_local_intent(message_body: str, current_datetime: datetime) -> dic
             "event": None,
             "search_query": body,
             "matched_event_hint": None,
+        }
+
+    if BULK_COMPLETE_RE.search(lower) and len(body.split()) <= 12:
+        return {
+            "intent": "bulk_complete",
+            "confidence": 0.95,
+            "reply_to_user": "",
+            "event": None,
+            "search_query": None,
+            "matched_event_hint": None,
+            "bulk_scope": "overdue",
         }
 
     if COMPLETE_RE.search(lower) and len(body.split()) <= 8:

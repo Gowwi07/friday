@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     # Gemini AI
     gemini_api_key: str = ""
 
+    # Fallback LLM APIs
+    fallback_api_keys: str = ""
+    fallback_base_url: str = "https://aiapiv2.pekpik.com/v1"
+    fallback_model: str = "gemini-2.5-flash"
+
     # WhatsApp Business Cloud API (Meta)
     whatsapp_access_token: str = ""
     whatsapp_phone_number_id: str = ""
