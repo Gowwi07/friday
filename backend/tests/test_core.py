@@ -51,6 +51,19 @@ class NoGeminiAgent:
         raise RuntimeError("Should not be called when client is None")
 
 
+class FakeChatAgent:
+    """Simulates an agent returning the conversational chat intent."""
+    client = True
+
+    async def process_message(self, **_kwargs):
+        return {
+            "intent": "chat",
+            "confidence": 0.9,
+            "reply_to_user": "I see you have 1 active task. Would you like me to schedule a preparation slot?",
+            "event": None,
+        }
+
+
 class TimeTests(unittest.TestCase):
     def test_offset_datetime_is_converted_to_naive_ist(self):
         parsed = parse_iso_datetime("2026-07-01T12:00:00Z")
@@ -329,6 +342,30 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             night = await generate_night_summary(db, "919000000000")
         self.assertIn("Good night", night)
         self.assertIn("Messages reviewed: 0", night)
+
+    async def test_chat_intent_routes_correctly_and_does_not_modify_db(self):
+        with patch.object(webhook, "get_agent", return_value=FakeChatAgent()), patch.object(
+            webhook, "send_whatsapp_message", new=AsyncMock(return_value=True)
+        ) as sender:
+            await webhook._process_message(
+                from_number="919999999999",
+                from_name="Test User",
+                body="What's your advice on scheduling?",
+                msg_id="wamid.chat-1",
+                msg_type="text",
+                timestamp=1782840000,
+            )
+
+        async with AsyncSessionLocal() as db:
+            event_count = await db.scalar(select(func.count()).select_from(Event))
+            message_count = await db.scalar(select(func.count()).select_from(IncomingMessage))
+
+        self.assertEqual(event_count, 0)
+        self.assertEqual(message_count, 1)
+        sender.assert_awaited_once_with(
+            "919999999999",
+            "I see you have 1 active task. Would you like me to schedule a preparation slot?",
+        )
 
     async def test_daily_job_claim_is_idempotent(self):
         from scheduler.jobs import _claim_daily_job

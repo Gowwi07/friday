@@ -12,7 +12,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Request, Query, HTTPException, BackgroundTasks
 from sqlalchemy import select
 
-from database.models import IncomingMessage, EventStatus, MessageType
+from database.models import IncomingMessage, EventStatus, MessageType, Event
 from ai.agent import get_agent
 from ai.rules import try_parse_local_intent
 from services.reminder import (
@@ -268,6 +268,26 @@ async def _process_message(
                 if quoted_body:
                     ai_body = f"Replying to earlier: {quoted_body}\nUser: {body}"
 
+            # Query active events to build cognitive context for the agent
+            active_res = await db.execute(
+                select(Event)
+                .where(
+                    Event.status == EventStatus.ACTIVE,
+                    Event.user_phone == from_number,
+                )
+                .order_by(Event.event_datetime.asc().nullslast(), Event.deadline.asc().nullslast())
+                .limit(10)
+            )
+            active_events = active_res.scalars().all()
+            active_tasks_summary = ""
+            if active_events:
+                active_tasks_summary = "\n".join(
+                    f"- {e.title}" + (f" (due {e.event_datetime.strftime('%d %b %Y, %I:%M %p')})" if e.event_datetime else "")
+                    for e in active_events
+                )
+            else:
+                active_tasks_summary = "No active tasks."
+
             current_time = now_ist()
             agent = get_agent()
 
@@ -275,6 +295,7 @@ async def _process_message(
                 ai_result = await agent.process_message(
                     message_body=ai_body,
                     conversation_history=history,
+                    active_tasks_summary=active_tasks_summary,
                     is_forwarded=is_forwarded,
                     current_datetime=current_time,
                 )
