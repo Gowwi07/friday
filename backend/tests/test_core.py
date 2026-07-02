@@ -93,6 +93,20 @@ class TimeTests(unittest.TestCase):
         self.assertEqual(message["event"]["title"], "Message hi")
         self.assertEqual(parse_iso_datetime(message["event"]["event_datetime"]), datetime(2026, 6, 30, 23, 30))
 
+        # Test "Wake me up" without a date word (should default to today/tomorrow based on current time)
+        morning_current = datetime(2026, 6, 30, 10, 0, tzinfo=IST)
+        wake = try_parse_create_event("Wake me up at 5:30 pm", morning_current)
+        self.assertEqual(wake["intent"], "create_event")
+        self.assertEqual(wake["event"]["title"], "Reminder")
+        self.assertEqual(parse_iso_datetime(wake["event"]["event_datetime"]), datetime(2026, 6, 30, 17, 30))
+
+        # Test hyphenated named months (e.g. 04-July-2026)
+        hyphen_current = datetime(2026, 7, 2, 15, 45, tzinfo=IST)
+        res = try_parse_local_intent("Infosys Limited - Bangalore opt-in deadline time 04.00 PM, 04-July-2026", hyphen_current)
+        self.assertEqual(res["intent"], "create_event")
+        # Deadline field should contain the July 4th date
+        self.assertEqual(parse_iso_datetime(res["event"]["deadline"]), datetime(2026, 7, 4, 16, 0))
+
     def test_rules_parse_forwarded_reschedule_without_confusing_date_as_time(self):
         current = datetime(2026, 7, 2, 19, 52, tzinfo=IST)
         result = try_parse_local_intent(

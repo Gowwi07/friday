@@ -23,13 +23,13 @@ RANGE_TIME_RE = re.compile(
 DATE_RE = re.compile(
     r"\b(\d{1,2})(?:st|nd|rd|th)?(?:"
     r"[./-](\d{1,2})(?:[./-](\d{2,4}))?|"
-    r"\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"[\s./-]+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
     r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"(?:\s+(\d{2,4}))?)\b",
+    r"(?:[\s./-]+(\d{2,4}))?)\b",
     re.IGNORECASE,
 )
 REMINDER_WORD_RE = re.compile(
-    r"\b(remind me|msg me|message me|ping me|send me|tell me|remember|notify me)\b",
+    r"\b(remind me|msg me|message me|ping me|send me|tell me|remember|notify me|wake me up|wake me|alarm)\b",
     re.IGNORECASE,
 )
 TRACK_WORD_RE = re.compile(
@@ -104,35 +104,43 @@ def _parse_date(message: str, current_datetime: datetime) -> datetime:
     base = to_ist_naive(current_datetime)
     lower = message.lower()
 
-    match = DATE_RE.search(message)
-    if not match:
+    matches = list(DATE_RE.finditer(message))
+    if not matches:
         if "tomorrow" in lower:
             return base + timedelta(days=1)
         if "today" in lower or "tonight" in lower:
             return base
         return base
 
-    day = int(match.group(1))
-    numeric_month = match.group(2)
-    numeric_year = match.group(3)
-    named_month = match.group(4)
-    named_year = match.group(5)
-    month = int(numeric_month) if numeric_month else MONTHS[named_month.lower()]
-    year = int(numeric_year or named_year or base.year)
-    if year < 100:
-        year += 2000
+    for match in matches:
+        day = int(match.group(1))
+        numeric_month = match.group(2)
+        numeric_year = match.group(3)
+        named_month = match.group(4)
+        named_year = match.group(5)
 
-    try:
-        parsed = base.replace(year=year, month=month, day=day)
-    except ValueError:
-        return base
-
-    if not numeric_year and not named_year and parsed.date() < base.date():
         try:
-            parsed = parsed.replace(year=year + 1)
-        except ValueError:
-            pass
-    return parsed
+            month = int(numeric_month) if numeric_month else MONTHS[named_month.lower()]
+            if month < 1 or month > 12:
+                continue
+            year = int(numeric_year or named_year or base.year)
+            if year < 100:
+                year += 2000
+
+            parsed = base.replace(year=year, month=month, day=day)
+
+            if not numeric_year and not named_year and parsed.date() < base.date():
+                try:
+                    parsed = parsed.replace(year=year + 1)
+                except ValueError:
+                    pass
+            return parsed
+        except (ValueError, KeyError, IndexError):
+            continue
+
+    if "tomorrow" in lower:
+        return base + timedelta(days=1)
+    return base
 
 
 def _parse_datetime(message: str, current_datetime: datetime) -> datetime | None:
