@@ -200,10 +200,17 @@ Respond with JSON only."""
             }
         except Exception as e:
             logger.error("Gemini API error: %s", e)
+            err_str = str(e).lower()
+            reply = "I'm having a bit of trouble connecting to my brain right now. Please try again in a moment."
+            if "429" in err_str or "resource_exhausted" in err_str:
+                reply = "I've hit my daily Gemini limit for now. Please wait a bit or try again later!"
+            elif "401" in err_str or "api_key" in err_str:
+                reply = "My Gemini API key seems invalid. Please check the backend configuration."
+
             return {
                 "intent": "ignore",
                 "confidence": 0.0,
-                "reply_to_user": "",
+                "reply_to_user": reply,
                 "event": None,
             }
 

@@ -352,7 +352,7 @@ async def find_best_matching_event(
         ):
             return event
 
-    return events[0]
+    return None
 
 
 async def save_conversation_turn(

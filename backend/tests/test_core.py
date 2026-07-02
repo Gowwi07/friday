@@ -367,6 +367,36 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             "I see you have 1 active task. Would you like me to schedule a preparation slot?",
         )
 
+    async def test_find_best_matching_event_returns_none_if_hint_does_not_match(self):
+        from services.reminder import find_best_matching_event
+        async with AsyncSessionLocal() as db:
+            # Create an active event
+            await create_event_from_ai(
+                db,
+                {
+                    "intent": "create_event",
+                    "confidence": 0.95,
+                    "reply_to_user": "Saved.",
+                    "event": {
+                        "title": "Mock Interview Planning",
+                        "category": "Interview",
+                        "priority": "Medium",
+                        "event_datetime": "2026-07-03T08:00:00",
+                    },
+                },
+                "Mock interview tomorrow 8 AM",
+                "919999999999",
+            )
+            
+            # Match with empty/no hint -> should return the mock interview event
+            res_no_hint = await find_best_matching_event(db, None, "919999999999")
+            self.assertIsNotNone(res_no_hint)
+            self.assertEqual(res_no_hint.title, "Mock Interview Planning")
+            
+            # Match with non-matching hint -> should return None (not default to mock interview)
+            res_bad_hint = await find_best_matching_event(db, "Theory session", "919999999999")
+            self.assertIsNone(res_bad_hint)
+
     async def test_daily_job_claim_is_idempotent(self):
         from scheduler.jobs import _claim_daily_job
 
