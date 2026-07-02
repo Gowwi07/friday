@@ -19,6 +19,7 @@ from services.reminder import (
     create_event_from_ai,
     update_event_from_ai,
     mark_event_complete,
+    bulk_complete_events,
     find_best_matching_event,
     save_conversation_turn,
     get_conversation_history,
@@ -350,6 +351,18 @@ async def _process_message(
                         raw_msg.intent = "create_event"
                         raw_msg.linked_event_id = event.id
                         raw_msg.processed = True
+
+            elif intent == "bulk_complete":
+                scope = ai_result.get("bulk_scope") or "overdue"
+                completed = await bulk_complete_events(db, from_number, scope)
+                raw_msg.intent = "bulk_complete"
+                raw_msg.processed = True
+                if completed:
+                    titles = "\n".join(f"  - {t}" for t in completed[:10])
+                    overflow = f"\n  ...and {len(completed) - 10} more" if len(completed) > 10 else ""
+                    reply = f"Done! Cleared {len(completed)} task(s):\n{titles}{overflow}"
+                else:
+                    reply = "No matching tasks found to clear."
 
             elif intent == "search":
                 task_list = await generate_task_list(db, from_number)

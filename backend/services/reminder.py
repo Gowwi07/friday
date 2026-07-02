@@ -1,8 +1,7 @@
 """
-FRIDAY — Reminder Service
+FRIDAY -- Reminder Service
 
-Handles creation, updating, and cancellation of reminder plans.
-Also handles completion detection.
+Handles creation, updating, and completion of events and reminder plans.
 """
 
 import logging
@@ -27,12 +26,12 @@ def _enum_value(value):
     return value.value if hasattr(value, "value") else value
 
 
-# Words that carry discriminating meaning (ignore short stop-words like "lab", "the", "for")
+# Words that carry discriminating meaning for duplicate detection
 _STOP_SHORT = {"the", "for", "and", "but", "not", "are", "was", "has", "had"}
 
 
 def _normalise_title(value: str | None) -> set[str]:
-    """Extract meaningful words (>3 chars, not in short stop-word list) for overlap scoring."""
+    """Extract meaningful words (>3 chars) for overlap scoring."""
     words = re.findall(r"[a-z0-9]+", (value or "").lower())
     return {word for word in words if len(word) > 3 and word not in _STOP_SHORT}
 
@@ -52,6 +51,12 @@ async def _find_duplicate_event(
     event_datetime: datetime | None,
     deadline: datetime | None,
 ) -> Optional[Event]:
+    """
+    Find an existing event that matches the title + time closely enough
+    to be considered a duplicate update rather than a new event.
+    - Requires >=2 meaningful word overlap (>3 chars)
+    - Time within 6h window
+    """
     ref = event_datetime or deadline
     title_words = _normalise_title(title)
     if not title_words:
@@ -65,12 +70,9 @@ async def _find_duplicate_event(
     )
     for event in result.scalars().all():
         overlap = title_words & _normalise_title(event.title)
-        # Require at least 2 meaningful overlapping words to consider them the same event.
-        # This prevents "Lab 1" and "Lab 2" from merging (they share only "lab" which is 3 chars, filtered out)
         if len(overlap) < 2:
             continue
         existing_ref = event.event_datetime or event.deadline
-        # Use a 6-hour window (not 12h) so different-day sessions of the same course stay separate.
         if ref and existing_ref and abs(existing_ref - ref) <= timedelta(hours=6):
             return event
         if not ref or not existing_ref:
@@ -84,10 +86,7 @@ async def create_event_from_ai(
     source_message: str,
     user_phone: str,
 ) -> Optional[Event]:
-    """
-    Create an Event + its ReminderPlans from the AI extraction result.
-    Returns the created Event.
-    """
+    """Create an Event + ReminderPlans from the AI extraction result."""
     event_data = ai_result.get("event") or {}
     if not event_data:
         return None
@@ -100,7 +99,7 @@ async def create_event_from_ai(
 
     duplicate = await _find_duplicate_event(db, user_phone, title, event_datetime, deadline)
     if duplicate:
-        logger.info("Updating duplicate-looking event '%s' instead of creating a new one", duplicate.title)
+        logger.info("Updating duplicate-looking event '%s' instead of creating", duplicate.title)
         return await update_event_from_ai(db, duplicate, ai_result, source_message)
 
     event = Event(
@@ -123,9 +122,8 @@ async def create_event_from_ai(
     )
 
     db.add(event)
-    await db.flush()  # Get event.id
+    await db.flush()
 
-    # Generate and store reminder plans
     reminder_list = plan_reminders(
         event_datetime=event.event_datetime,
         deadline=event.deadline,
@@ -136,19 +134,18 @@ async def create_event_from_ai(
     )
 
     for r in reminder_list:
-        plan = ReminderPlan(
+        db.add(ReminderPlan(
             event_id=event.id,
             scheduled_at=r["scheduled_at"],
             reminder_type=r["reminder_type"],
             message_template=r["message_template"],
             status=ReminderStatus.PENDING,
-        )
-        db.add(plan)
+        ))
 
     await db.commit()
     await db.refresh(event)
 
-    logger.info(f"✅ Created event '{event.title}' with {len(reminder_list)} reminders")
+    logger.info("Created event '%s' with %d reminders", event.title, len(reminder_list))
     return event
 
 
@@ -163,7 +160,7 @@ async def update_event_from_ai(
     if not event_data:
         return event
 
-    if event_data.get("title") and event.title.lower() in {"untitled", "reminder"}:
+    if event_data.get("title") and _enum_value(event.title) in {"untitled", "reminder"}:
         event.title = event_data["title"][:500]
     if event_data.get("description"):
         event.description = event_data["description"]
@@ -219,7 +216,7 @@ async def update_event_from_ai(
 
     await db.commit()
     await db.refresh(event)
-    logger.info("✅ Updated event '%s' with %s pending reminders", event.title, len(reminder_list))
+    logger.info("Updated event '%s' with %d pending reminders", event.title, len(reminder_list))
     return event
 
 
@@ -227,11 +224,10 @@ async def mark_event_complete(
     db: AsyncSession,
     event: Event,
 ) -> None:
-    """Mark an event as completed and cancel pending reminders."""
+    """Mark a single event as completed and cancel its pending reminders."""
     event.status = EventStatus.COMPLETED
     event.completed_at = now_ist()
 
-    # Cancel all pending reminders except follow-ups already sent
     result = await db.execute(
         select(ReminderPlan).where(
             ReminderPlan.event_id == event.id,
@@ -243,7 +239,82 @@ async def mark_event_complete(
         plan.status = ReminderStatus.SKIPPED
 
     await db.commit()
-    logger.info(f"✅ Event '{event.title}' marked complete. {len(pending)} reminders cancelled.")
+    logger.info("Event '%s' marked complete. %d reminders cancelled.", event.title, len(pending))
+
+
+async def bulk_complete_events(
+    db: AsyncSession,
+    user_phone: str,
+    scope: str,
+) -> list[str]:
+    """
+    Mark a group of events as completed based on scope.
+
+    scope values:
+      "overdue"                  - all active events whose datetime is in the past
+      "yesterday"                - all active events from yesterday
+      "today"                    - all active events due today
+      "all_completed"            - everything past its time (user says all done)
+      "specific_day:YYYY-MM-DD"  - all active events on that specific date
+
+    Returns list of completed event titles.
+    """
+    now = now_ist()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    result = await db.execute(
+        select(Event).where(
+            Event.status == EventStatus.ACTIVE,
+            Event.user_phone == user_phone,
+        )
+    )
+    all_events = result.scalars().all()
+
+    def _ref(e: Event):
+        return e.event_datetime or e.deadline
+
+    if scope == "overdue":
+        targets = [e for e in all_events if _ref(e) and _ref(e) < now]
+    elif scope == "yesterday":
+        yesterday_start = today_start - timedelta(days=1)
+        targets = [e for e in all_events if _ref(e) and yesterday_start <= _ref(e) < today_start]
+    elif scope == "today":
+        tomorrow_start = today_start + timedelta(days=1)
+        targets = [e for e in all_events if _ref(e) and today_start <= _ref(e) < tomorrow_start]
+    elif scope == "all_completed":
+        targets = [e for e in all_events if not _ref(e) or _ref(e) <= now]
+    elif scope and scope.startswith("specific_day:"):
+        try:
+            day_str = scope.split(":", 1)[1]
+            specific_day = datetime.strptime(day_str, "%Y-%m-%d")
+            specific_end = specific_day + timedelta(days=1)
+            targets = [e for e in all_events if _ref(e) and specific_day <= _ref(e) < specific_end]
+        except Exception:
+            targets = []
+    else:
+        # Default: treat unknown scope same as overdue
+        targets = [e for e in all_events if _ref(e) and _ref(e) < now]
+
+    completed_titles = []
+    for event in targets:
+        event.status = EventStatus.COMPLETED
+        event.completed_at = now
+        completed_titles.append(event.title)
+
+        pending_result = await db.execute(
+            select(ReminderPlan).where(
+                ReminderPlan.event_id == event.id,
+                ReminderPlan.status == ReminderStatus.PENDING,
+            )
+        )
+        for plan in pending_result.scalars().all():
+            plan.status = ReminderStatus.SKIPPED
+
+    if completed_titles:
+        await db.commit()
+        logger.info("Bulk completed %d events (scope=%s) for %s", len(completed_titles), scope, user_phone[:8])
+
+    return completed_titles
 
 
 async def find_best_matching_event(
@@ -270,9 +341,8 @@ async def find_best_matching_event(
         return None
 
     if not hint:
-        return events[0]  # Most recent
+        return events[0]
 
-    # Simple keyword match
     hint_lower = hint.lower()
     for event in events:
         if event.title and any(
@@ -282,7 +352,7 @@ async def find_best_matching_event(
         ):
             return event
 
-    return events[0]  # Fallback to most recent
+    return events[0]
 
 
 async def save_conversation_turn(
@@ -316,5 +386,5 @@ async def get_conversation_history(
         .limit(limit)
     )
     rows = result.scalars().all()
-    rows.reverse()  # Chronological order
+    rows.reverse()
     return [{"role": r.role, "content": r.content} for r in rows]

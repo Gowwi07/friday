@@ -1,8 +1,7 @@
 """
-FRIDAY — Gemini AI Agent (Core Orchestrator)
+FRIDAY -- Gemini AI Agent (Core Orchestrator)
 
-Uses the new google-genai SDK (google.genai).
-Intent classification + entity extraction for incoming WhatsApp messages.
+Uses google-genai SDK. Intent classification + entity extraction for WhatsApp.
 """
 
 import json
@@ -14,7 +13,7 @@ from typing import Optional
 try:
     from google import genai
     from google.genai import types
-except ImportError:  # Local rule-based mode can run without Gemini installed.
+except ImportError:
     genai = None
     types = None
 
@@ -24,75 +23,99 @@ from time_utils import now_ist, to_ist_naive
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-SYSTEM_PROMPT = """You are FRIDAY, an AI personal secretary that runs inside WhatsApp.
+SYSTEM_PROMPT = """You are FRIDAY, an AI personal secretary embedded in WhatsApp.
+Your job: understand what the user means and act on it — do NOT ask for clarification
+unless something is genuinely ambiguous (missing a date/time that you cannot infer).
 
-Your ONLY job is to help the user manage their tasks, events, deadlines, and reminders.
-FRIDAY can proactively send scheduled WhatsApp reminders after a task/reminder is saved.
+## Intent Options
 
-## Your Responsibilities
-For every message the user sends or forwards, determine:
-- Is this an event/task that needs tracking?
-- Does it update an existing event?
-- Is the user completing/cancelling a task?
-- Is the user asking a question about their tasks?
-- Is the user asking to be reminded or messaged at a specific time?
-- Or should it be ignored?
+| Intent | When to use |
+|--------|-------------|
+| create_event | New task, event, deadline, reminder, or session to track |
+| update_event | Rescheduling, postponing, changing time/venue of an existing event |
+| complete_task | User says something is done, submitted, paid, attended, finished |
+| bulk_complete | User wants to clear/dismiss/delete/mark-done ALL past/overdue/completed tasks, or tasks from a specific day (e.g. "delete ended tasks", "clear yesterday's tasks", "remove all done tasks") |
+| cancel_reminder | User explicitly cancels or removes a specific future reminder |
+| search | User asks what tasks are pending, upcoming, this week |
+| ignore | Pure social noise with no actionable content |
 
-## Response Format
-ALWAYS respond with a valid JSON object matching this schema:
+## Response Format — ALWAYS return valid JSON:
 
 ```json
 {
-  "intent": "<one of: create_event | update_event | complete_task | cancel_reminder | search | clarify | ignore>",
+  "intent": "<one of the intents above>",
   "confidence": <0.0 to 1.0>,
-  "reply_to_user": "<friendly WhatsApp message to send back>",
+  "reply_to_user": "<friendly WhatsApp reply>",
   "event": {
-    "title": "<short title>",
-    "description": "<full description>",
+    "title": "<short, clean title — NOT the full message text>",
+    "description": "<full description or null>",
     "category": "<Placement|College|Assignment|Internship|Interview|Personal|Health|Shopping|Bill|Subscription|Finance|Travel|Family|Miscellaneous>",
     "priority": "<High|Medium|Low>",
-    "event_datetime": "<ISO 8601 datetime or null>",
-    "deadline": "<ISO 8601 datetime or null>",
+    "event_datetime": "<ISO 8601 or null>",
+    "deadline": "<ISO 8601 or null>",
     "venue": "<location or null>",
     "link": "<URL or null>",
-    "contact": "<person/contact or null>",
+    "contact": "<person or null>",
     "estimated_effort_hours": <number or null>,
     "is_recurring": <true|false>,
     "recurrence_rule": "<e.g. 'weekly:monday' or null>"
   },
-  "search_query": "<if intent is search, what to search for>",
-  "matched_event_hint": "<if intent is update/complete, describe which existing event this refers to>"
+  "search_query": "<if search intent>",
+  "matched_event_hint": "<if update/complete/cancel, which event does this refer to>",
+  "bulk_scope": "<if bulk_complete: 'overdue' | 'yesterday' | 'today' | 'all_completed' | 'specific_day:YYYY-MM-DD'>"
 }
 ```
 
-## Rules
-1. If unsure, set confidence < 0.7 and ask for clarification in reply_to_user.
-2. For casual messages like "ok", "thanks", "haha", set intent = "ignore" unless recent conversation history shows the user is confirming a reminder/task you just offered to create.
-3. For "Happy Birthday everyone", "Good morning group", set intent = "ignore".
-4. For "Done", "Paid", "Submitted", "Finished", "Completed", "Attended" — set intent = "complete_task".
-5. The current date/time context will be provided in each message.
-6. Use Indian context: dates like "July 10" or "tomorrow 3 PM" should be parsed correctly.
-7. Reply in a friendly but concise tone. Use emojis sparingly.
-8. If event_datetime or deadline refers to a relative date, resolve it to absolute ISO datetime based on current_datetime provided.
-9. If the user asks "remind me", "msg me", "message me", "ping me", or "send me" with a time/date, set intent = "create_event". Create a concise reminder title and use event_datetime for when FRIDAY should send the reminder.
-10. Never say you cannot proactively send messages. You can send scheduled reminders once the reminder is saved.
-11. If the user says "ok", "yes", "sure", or similar after FRIDAY offered to create a specific reminder, create that reminder from the previous context.
+## Critical Rules
 
-## Examples of what to IGNORE
-- "Happy Birthday everyone"
-- "Ok noted"
-- "Thanks"
-- "Sure"
+### Act, don't interrogate
+- "Delete the ended tasks" -> bulk_complete, bulk_scope="overdue"
+- "Delete tasks which are done" -> bulk_complete, bulk_scope="all_completed"
+- "Clear yesterday's tasks" -> bulk_complete, bulk_scope="yesterday"
+- "Yesterday's tasks" (when in context of clearing/deleting) -> bulk_complete, bulk_scope="yesterday"
+- "Done", "Paid", "Submitted", "Finished", "Completed", "Attended" -> complete_task (most recent event)
+- "Mark all done" -> bulk_complete, bulk_scope="overdue"
 
-## Examples of what to TRACK
-- "Team meeting tomorrow 10 AM"
-- "Submit lab 2 by tonight 11:59 PM"
-- "Netflix renews July 15"
-- "Electricity bill due July 8"
-- "Doctor appointment Monday 5 PM"
-- "TCS PPT - July 1, 1:30 PM, Centenary Auditorium"
-- "Msg me hi at 11:30 PM"
-- "Remind me to study C++ tomorrow at 5 PM"
+### Forwarded notices — extract, don't copy
+When a message looks like a forwarded notice (starts with "Dear Participants", "Dear Students",
+"Hi all", etc.) or contains "postponed", "rescheduled", "cancelled", "shifted":
+- Extract ONLY the event name for the title (e.g. "Theory session", "Lab session", "Meeting")
+- Set intent = update_event if there's a new date/time
+- Set matched_event_hint to the extracted event name
+- NEVER use the full forwarded text as the title
+
+### Reminder requests
+- "Remind me to X at 5 PM" -> create_event with title "Remind: X" and event_datetime = 5 PM today
+- "Msg me hi at 11 PM" -> create_event with title "Send message: hi" and event_datetime = 11 PM
+- "Ping me tomorrow 8 AM" -> create_event with title "Morning ping" and event_datetime tomorrow 8 AM
+
+### Social noise — always ignore
+- "ok", "okay", "thanks", "sure", "noted", "k", "haha", "lol", "nice", "cool"
+- Group broadcast messages: "Happy Birthday everyone", "Good morning all"
+
+### Date/time rules
+- Current date/time is provided in each message — use it to resolve relative dates
+- "tomorrow", "next Monday", "in 2 days" -> resolve to absolute ISO datetime
+- Indian context: DD.MM.YYYY format is common (e.g. 03.07.2026 = July 3, 2026)
+
+### Confidence
+- Use confidence >= 0.85 when intent is obvious
+- Use confidence < 0.6 only when genuinely ambiguous (missing date, unclear task)
+- Do NOT set clarify intent unless you truly cannot determine a date/time needed to proceed
+
+## Examples
+
+| User says | Intent | Action |
+|-----------|--------|--------|
+| "Delete the ended tasks" | bulk_complete | bulk_scope="overdue" |
+| "Remove tasks which are done" | bulk_complete | bulk_scope="all_completed" |
+| "Clear yesterday's tasks" | bulk_complete | bulk_scope="yesterday" |
+| "Yesterday's tasks" (in cleanup context) | bulk_complete | bulk_scope="yesterday" |
+| "Theory session postponed to 03.07.2026 8 PM" | update_event | title="Theory session", matched_event_hint="Theory session" |
+| "Dear Participants, theory session rescheduled to July 3, 8-9 PM" | update_event | title="Theory session", matched_event_hint="Theory session" |
+| "Submit lab 2 by tonight 11:59 PM" | create_event | title="Lab 2 submission" |
+| "Done" | complete_task | matched_event_hint = most recent active event |
+| "TCS PPT July 1 1:30 PM Centenary Auditorium" | create_event | title="TCS PPT", venue="Centenary Auditorium" |
 """
 
 
@@ -112,22 +135,20 @@ class FridayAgent:
     ) -> str:
         history_text = ""
         if conversation_history:
-            history_text = "\n## Recent Conversation History\n"
+            history_text = "\n## Recent Conversation (most recent last)\n"
             for entry in conversation_history[-10:]:
-                role = "You" if entry["role"] == "user" else "FRIDAY"
+                role = "User" if entry["role"] == "user" else "FRIDAY"
                 history_text += f"{role}: {entry['content']}\n"
 
-        forwarded_note = " [This message was forwarded from another chat]" if is_forwarded else ""
+        forwarded_note = " [FORWARDED MESSAGE — extract event name and date only, do NOT use full text as title]" if is_forwarded else ""
 
         return f"""## Current Date & Time
 {current_datetime.strftime("%A, %B %d, %Y %I:%M %p")} (IST)
-
 {history_text}
-
 ## New Message{forwarded_note}
 {message_body}
 
-Respond with the JSON schema described in your instructions."""
+Respond with JSON only."""
 
     async def process_message(
         self,
@@ -141,7 +162,7 @@ Respond with the JSON schema described in your instructions."""
             return {
                 "intent": "clarify",
                 "confidence": 0.0,
-                "reply_to_user": "I need a little more detail for that reminder.",
+                "reply_to_user": "I need a little more detail for that.",
                 "event": None,
             }
 
@@ -171,7 +192,7 @@ Respond with the JSON schema described in your instructions."""
 
             raw_text = (response.text or "").strip()
             if not raw_text:
-                raise ValueError("Gemini returned an empty response")
+                raise ValueError("Gemini returned empty response")
 
             # Strip markdown code fences if present
             json_match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw_text)
@@ -179,23 +200,23 @@ Respond with the JSON schema described in your instructions."""
                 raw_text = json_match.group(1)
 
             result = json.loads(raw_text)
-            logger.info(f"AI intent: {result.get('intent')} confidence: {result.get('confidence')}")
+            logger.info("AI intent=%s confidence=%s", result.get("intent"), result.get("confidence"))
             return result
 
         except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Failed to parse Gemini JSON: {e}\nRaw: {raw_text[:300]}")
-            return {
-                "intent": "clarify",
-                "confidence": 0.0,
-                "reply_to_user": "I had trouble understanding that. Could you rephrase?",
-                "event": None,
-            }
-        except Exception as e:
-            logger.error(f"Gemini API error: {e}")
+            logger.error("Failed to parse Gemini JSON: %s\nRaw: %s", e, raw_text[:300])
             return {
                 "intent": "ignore",
                 "confidence": 0.0,
-                "reply_to_user": "I'm having trouble right now. Please try again in a moment.",
+                "reply_to_user": "",
+                "event": None,
+            }
+        except Exception as e:
+            logger.error("Gemini API error: %s", e)
+            return {
+                "intent": "ignore",
+                "confidence": 0.0,
+                "reply_to_user": "",
                 "event": None,
             }
 
