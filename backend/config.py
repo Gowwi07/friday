@@ -14,13 +14,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cron_secret: str = ""
 
+    # Owner's preferred first name for personalized greetings
+    user_name: str = ""
+
     # Gemini AI
     gemini_api_key: str = ""
 
     # WhatsApp Business Cloud API (Meta)
     whatsapp_access_token: str = ""
     whatsapp_phone_number_id: str = ""
-    whatsapp_verify_token: str = "friday_webhook_secret_2026"
+    whatsapp_verify_token: str = ""
 
     # Your personal WhatsApp number (where FRIDAY sends reminders)
     # Format: 919876543210 (no + or @c.us)
@@ -29,11 +32,25 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./friday.db"
 
-    # Scheduler
-    morning_brief_hour: int = 7
-    morning_brief_minute: int = 0
+    # Scheduler — wake-up time drives the morning brief
+    wake_up_hour: int = 7
+    wake_up_minute: int = 0
+
+    # Night summary time
     night_summary_hour: int = 22
     night_summary_minute: int = 0
+
+    # Legacy aliases — kept so old .env files with MORNING_BRIEF_HOUR still work
+    morning_brief_hour: int = -1   # -1 = use wake_up_hour
+    morning_brief_minute: int = -1  # -1 = use wake_up_minute
+
+    @property
+    def effective_morning_hour(self) -> int:
+        return self.wake_up_hour if self.morning_brief_hour == -1 else self.morning_brief_hour
+
+    @property
+    def effective_morning_minute(self) -> int:
+        return self.wake_up_minute if self.morning_brief_minute == -1 else self.morning_brief_minute
 
     class Config:
         env_file = ".env"

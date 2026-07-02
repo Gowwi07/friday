@@ -32,7 +32,7 @@ https://projects-promises-organizational-illustration.trycloudflare.com/webhook
 2. Left sidebar: **WhatsApp → Configuration**.
 3. Under **Webhook**, click **Edit**:
    - **Callback URL**: Paste your Cloudflare Webhook URL (ends in `.trycloudflare.com/webhook`)
-   - **Verify Token**: `friday_webhook_secret_2026`
+   - **Verify Token**: the private value in your local `backend/.env` as `WHATSAPP_VERIFY_TOKEN`
 4. Click **Verify and Save**.
 5. Click **Manage** under Webhook Fields and subscribe to **`messages`**.
 

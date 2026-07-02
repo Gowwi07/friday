@@ -16,6 +16,20 @@ services:
         value: INFO
       - key: TZ
         value: Asia/Kolkata
+      # Wake-up / morning brief time (24h IST)
+      - key: WAKE_UP_HOUR
+        value: "7"
+      - key: WAKE_UP_MINUTE
+        value: "0"
+      # Night summary time (24h IST)
+      - key: NIGHT_SUMMARY_HOUR
+        value: "22"
+      - key: NIGHT_SUMMARY_MINUTE
+        value: "0"
+      # Your first name for greetings e.g. "Good morning, Peter!"
+      - key: USER_NAME
+        value: ""
+      # Secrets — set these in Render dashboard, not here
       - key: GEMINI_API_KEY
         sync: false
       - key: WHATSAPP_ACCESS_TOKEN

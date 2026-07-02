@@ -11,8 +11,12 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:  # Local rule-based mode can run without Gemini installed.
+    genai = None
+    types = None
 
 from config import get_settings
 from time_utils import now_ist, to_ist_naive
@@ -96,7 +100,7 @@ class FridayAgent:
     """Main AI agent for FRIDAY using google-genai SDK."""
 
     def __init__(self):
-        self.client = genai.Client(api_key=settings.gemini_api_key)
+        self.client = genai.Client(api_key=settings.gemini_api_key) if genai and settings.gemini_api_key else None
         self.model = "gemini-2.5-flash"
 
     def _build_prompt(
@@ -133,6 +137,14 @@ Respond with the JSON schema described in your instructions."""
         current_datetime: Optional[datetime] = None,
     ) -> dict:
         """Process an incoming WhatsApp message. Returns structured dict."""
+        if not self.client:
+            return {
+                "intent": "clarify",
+                "confidence": 0.0,
+                "reply_to_user": "I need a little more detail for that reminder.",
+                "event": None,
+            }
+
         if current_datetime is None:
             current_datetime = now_ist()
         else:

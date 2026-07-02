@@ -25,7 +25,7 @@ In your app dashboard → **WhatsApp → API Setup**:
 ```env
 WHATSAPP_ACCESS_TOKEN=EAAxxxxxxx...   (your access token)
 WHATSAPP_PHONE_NUMBER_ID=1234567890   (the Phone Number ID)
-WHATSAPP_VERIFY_TOKEN=friday_webhook_secret_2026   (keep this as-is)
+WHATSAPP_VERIFY_TOKEN=choose_a_long_private_random_value
 MY_WHATSAPP_NUMBER=919876543210   (your personal number, no + or spaces)
 ```
 
@@ -78,7 +78,7 @@ Once deployed, copy the Render webhook URL, for example:
 1. Go to **Meta App → WhatsApp → Configuration**.
 2. Click **Edit** under **Webhook**.
 3. Callback URL: `https://friday-backend-xxxx.onrender.com/webhook`
-4. Verify Token: `friday_webhook_secret_2026`
+4. Verify Token: the exact private value you set as `WHATSAPP_VERIFY_TOKEN` in Render.
 5. Click **Verify and Save**.
 6. Under Webhook Fields, click **Manage** and subscribe to **`messages`**.
 

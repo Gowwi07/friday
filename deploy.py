@@ -26,8 +26,22 @@ SERVICE_NAME = "friday-backend"
 REGION = "asia-south1"  # Mumbai — closest to India
 
 
+def _redacted_cmd(cmd: list[str]) -> str:
+    redacted = []
+    hide_next = False
+    for part in cmd:
+        if hide_next:
+            redacted.append("<redacted-env-vars>")
+            hide_next = False
+            continue
+        redacted.append(part)
+        if part == "--set-env-vars":
+            hide_next = True
+    return " ".join(redacted)
+
+
 def run(cmd: list[str], check=True) -> subprocess.CompletedProcess:
-    print(f"\n$ {' '.join(cmd)}")
+    print(f"\n$ {_redacted_cmd(cmd)}")
     use_shell = sys.platform == "win32"
     return subprocess.run(cmd, check=check, text=True, shell=use_shell)
 
@@ -64,7 +78,14 @@ def main():
     env = dotenv_values(ENV_FILE)
 
     # Check required vars
-    required = ["GEMINI_API_KEY", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "MY_WHATSAPP_NUMBER"]
+    required = [
+        "GEMINI_API_KEY",
+        "WHATSAPP_ACCESS_TOKEN",
+        "WHATSAPP_PHONE_NUMBER_ID",
+        "WHATSAPP_VERIFY_TOKEN",
+        "MY_WHATSAPP_NUMBER",
+        "DATABASE_URL",
+    ]
     missing = [k for k in required if not env.get(k) or "your_" in env.get(k, "")]
     if missing:
         print(f"\nERROR: Missing required .env values: {missing}")
@@ -83,11 +104,13 @@ def main():
         f"GEMINI_API_KEY={env['GEMINI_API_KEY']}",
         f"WHATSAPP_ACCESS_TOKEN={env['WHATSAPP_ACCESS_TOKEN']}",
         f"WHATSAPP_PHONE_NUMBER_ID={env['WHATSAPP_PHONE_NUMBER_ID']}",
-        f"WHATSAPP_VERIFY_TOKEN={env.get('WHATSAPP_VERIFY_TOKEN', 'friday_webhook_secret_2026')}",
+        f"WHATSAPP_VERIFY_TOKEN={env['WHATSAPP_VERIFY_TOKEN']}",
         f"MY_WHATSAPP_NUMBER={env['MY_WHATSAPP_NUMBER']}",
         f"DATABASE_URL={env.get('DATABASE_URL', '')}",
         "APP_ENV=production",
         "TZ=Asia/Kolkata",
+        f"WAKE_UP_HOUR={env.get('WAKE_UP_HOUR', env.get('MORNING_BRIEF_HOUR', '7'))}",
+        f"WAKE_UP_MINUTE={env.get('WAKE_UP_MINUTE', env.get('MORNING_BRIEF_MINUTE', '0'))}",
         f"MORNING_BRIEF_HOUR={env.get('MORNING_BRIEF_HOUR', '7')}",
         f"MORNING_BRIEF_MINUTE={env.get('MORNING_BRIEF_MINUTE', '0')}",
         f"NIGHT_SUMMARY_HOUR={env.get('NIGHT_SUMMARY_HOUR', '22')}",

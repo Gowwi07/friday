@@ -6,10 +6,11 @@ Also handles completion detection.
 """
 
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import (
@@ -20,6 +21,61 @@ from ai.planner import plan_reminders
 from time_utils import now_ist, parse_iso_datetime
 
 logger = logging.getLogger(__name__)
+
+
+def _enum_value(value):
+    return value.value if hasattr(value, "value") else value
+
+
+# Words that carry discriminating meaning (ignore short stop-words like "lab", "the", "for")
+_STOP_SHORT = {"the", "for", "and", "but", "not", "are", "was", "has", "had"}
+
+
+def _normalise_title(value: str | None) -> set[str]:
+    """Extract meaningful words (>3 chars, not in short stop-word list) for overlap scoring."""
+    words = re.findall(r"[a-z0-9]+", (value or "").lower())
+    return {word for word in words if len(word) > 3 and word not in _STOP_SHORT}
+
+
+def _safe_category(value: str | None) -> str:
+    return value if value in {item.value for item in EventCategory} else EventCategory.MISCELLANEOUS.value
+
+
+def _safe_priority(value: str | None) -> str:
+    return value if value in {item.value for item in EventPriority} else EventPriority.MEDIUM.value
+
+
+async def _find_duplicate_event(
+    db: AsyncSession,
+    user_phone: str,
+    title: str,
+    event_datetime: datetime | None,
+    deadline: datetime | None,
+) -> Optional[Event]:
+    ref = event_datetime or deadline
+    title_words = _normalise_title(title)
+    if not title_words:
+        return None
+
+    result = await db.execute(
+        select(Event)
+        .where(Event.status == EventStatus.ACTIVE, Event.user_phone == user_phone)
+        .order_by(Event.created_at.desc())
+        .limit(50)
+    )
+    for event in result.scalars().all():
+        overlap = title_words & _normalise_title(event.title)
+        # Require at least 2 meaningful overlapping words to consider them the same event.
+        # This prevents "Lab 1" and "Lab 2" from merging (they share only "lab" which is 3 chars, filtered out)
+        if len(overlap) < 2:
+            continue
+        existing_ref = event.event_datetime or event.deadline
+        # Use a 6-hour window (not 12h) so different-day sessions of the same course stay separate.
+        if ref and existing_ref and abs(existing_ref - ref) <= timedelta(hours=6):
+            return event
+        if not ref or not existing_ref:
+            return event
+    return None
 
 
 async def create_event_from_ai(
@@ -36,20 +92,24 @@ async def create_event_from_ai(
     if not event_data:
         return None
 
-    category = event_data.get("category")
-    if category not in {item.value for item in EventCategory}:
-        category = EventCategory.MISCELLANEOUS
-    priority = event_data.get("priority")
-    if priority not in {item.value for item in EventPriority}:
-        priority = EventPriority.MEDIUM
+    category = _safe_category(event_data.get("category"))
+    priority = _safe_priority(event_data.get("priority"))
+    event_datetime = parse_iso_datetime(event_data.get("event_datetime"))
+    deadline = parse_iso_datetime(event_data.get("deadline"))
+    title = (event_data.get("title") or "Untitled").strip()[:500]
+
+    duplicate = await _find_duplicate_event(db, user_phone, title, event_datetime, deadline)
+    if duplicate:
+        logger.info("Updating duplicate-looking event '%s' instead of creating a new one", duplicate.title)
+        return await update_event_from_ai(db, duplicate, ai_result, source_message)
 
     event = Event(
-        title=event_data.get("title", "Untitled"),
+        title=title,
         description=event_data.get("description"),
         category=category,
         priority=priority,
-        event_datetime=parse_iso_datetime(event_data.get("event_datetime")),
-        deadline=parse_iso_datetime(event_data.get("deadline")),
+        event_datetime=event_datetime,
+        deadline=deadline,
         venue=event_data.get("venue"),
         link=event_data.get("link"),
         contact=event_data.get("contact"),
@@ -89,6 +149,77 @@ async def create_event_from_ai(
     await db.refresh(event)
 
     logger.info(f"✅ Created event '{event.title}' with {len(reminder_list)} reminders")
+    return event
+
+
+async def update_event_from_ai(
+    db: AsyncSession,
+    event: Event,
+    ai_result: dict,
+    source_message: str | None = None,
+) -> Event:
+    """Update an active event and rebuild pending reminders."""
+    event_data = ai_result.get("event") or {}
+    if not event_data:
+        return event
+
+    if event_data.get("title") and event.title.lower() in {"untitled", "reminder"}:
+        event.title = event_data["title"][:500]
+    if event_data.get("description"):
+        event.description = event_data["description"]
+    if event_data.get("category"):
+        event.category = _safe_category(event_data.get("category"))
+    if event_data.get("priority"):
+        event.priority = _safe_priority(event_data.get("priority"))
+
+    event_datetime = parse_iso_datetime(event_data.get("event_datetime"))
+    deadline = parse_iso_datetime(event_data.get("deadline"))
+    if event_datetime:
+        event.event_datetime = event_datetime
+        event.deadline = None
+    if deadline:
+        event.deadline = deadline
+        event.event_datetime = None
+
+    for field in ("venue", "link", "contact", "estimated_effort_hours", "recurrence_rule"):
+        value = event_data.get(field)
+        if value not in (None, ""):
+            setattr(event, field, value)
+    if "is_recurring" in event_data:
+        event.is_recurring = bool(event_data.get("is_recurring"))
+    if source_message:
+        event.source_message = source_message
+    event.ai_confidence = ai_result.get("confidence", event.ai_confidence)
+    event.updated_at = now_ist()
+
+    await db.execute(
+        delete(ReminderPlan).where(
+            ReminderPlan.event_id == event.id,
+            ReminderPlan.status == ReminderStatus.PENDING,
+        )
+    )
+    await db.flush()
+
+    reminder_list = plan_reminders(
+        event_datetime=event.event_datetime,
+        deadline=event.deadline,
+        category=_enum_value(event.category),
+        priority=_enum_value(event.priority),
+        title=event.title,
+        venue=event.venue,
+    )
+    for r in reminder_list:
+        db.add(ReminderPlan(
+            event_id=event.id,
+            scheduled_at=r["scheduled_at"],
+            reminder_type=r["reminder_type"],
+            message_template=r["message_template"],
+            status=ReminderStatus.PENDING,
+        ))
+
+    await db.commit()
+    await db.refresh(event)
+    logger.info("✅ Updated event '%s' with %s pending reminders", event.title, len(reminder_list))
     return event
 
 
